@@ -4,7 +4,7 @@ This project studies whether clustered order arrivals improve prediction of the 
 
 We will reconstruct Nasdaq limit order books, study limit-order placement distances, and compare a Poisson queueing model, a queue-reactive model, and a Hawkes-driven model. A queue-imbalance logistic regression will serve as a predictive benchmark.
 
-**Current status:** planning stage. At initial setup, this repository contains this README only. The directories, modules, commands, and outputs below are the implementation plan; they are not implemented yet. The research scope and December 1 checkpoint come from `proposal_v2.pdf`. The Python structure, work allocation, interfaces, and intermediate schedule are proposed working choices for the team.
+**Current status:** planning stage. At initial setup, this repository contains this README only. The directories, modules, commands, and outputs below are the implementation plan; they are not implemented yet. The research scope and December 1 checkpoint come from `proposal_v2.pdf`. The Python structure, interfaces, and intermediate schedule are proposed working choices for the team.
 
 ## 1. Scope and research questions
 
@@ -59,6 +59,8 @@ Build features, liquidity regimes, and shared forecast labels
 ```
 
 Start with **one instrument and one training day**. After reconstruction passes its checks, expand to a small pilot with separate training and validation subsets drawn from their respective full-sample splits. Keep test days outside the pilot, then process the full sample. Model development can proceed in parallel once the data interfaces and a small fixture are stable.
+
+After the fixture and schema are frozen, tail analysis, baseline fitting, and Hawkes fitting can use the same processed data. Simulator development starts with synthetic rates and queues; evaluation starts with synthetic prediction tables. Integrate these components on the pilot before full-data fitting.
 
 ## 3. Files and directories to create
 
@@ -330,24 +332,7 @@ Define `--pilot` as processing the listed training and validation subsets, fitti
 
 For data access, inventory the team's existing raw files, record the Databento delivery format and access arrangements, and implement ingestion for that format before adding an optional downloader.
 
-## 7. Suggested division of work
-
-These assignments are a starting proposal for the six members, not confirmed responsibilities. Each owner should have another member review the interface and validation evidence before handoff.
-
-| Suggested owner | Main responsibility | First handoff |
-| --- | --- | --- |
-| Hubert King | Data inventory, ingestion, and book reconstruction | Working one-day replay and reproducible quality summary |
-| Cristian Gualy | Canonical event mapping, features, labels, and regimes | Documented schemas and common pilot forecast table |
-| Ryan Hou | Placement-tail analysis and cross-instrument summaries | Tail estimates, comparison table, and CCDF figures |
-| Zichen Guo | Poisson and queue-reactive models | Fitted baseline rates, sparse-state policy, and simulator integration |
-| Sang Park | Hawkes likelihood, fitting, and diagnostics | Pilot six-stream fit, validation decay search, residual checks |
-| Haodi Guo | Shared simulation engine, logistic benchmark, and evaluation | Common prediction interface, score table, and paired bootstrap |
-
-Model owners implement their arrival generators against the shared engine. All members contribute to the report section covering their component. The simulator/evaluation owner coordinates integration; reconstruction and labeling owners jointly review the execution-counting convention.
-
-Work can proceed concurrently after the fixture and schema are frozen: tail analysis, baseline fitting, and Hawkes fitting use the same processed data; simulator development starts with synthetic rates and queues; evaluation starts with synthetic prediction tables. The first integration should happen on the pilot, before any full-data fitting.
-
-## 8. Schedule and deliverables
+## 7. Schedule and deliverables
 
 The proposal sets a **December 1 checkpoint**. The internal dates below are a suggested schedule leading up to that checkpoint; the final submission deadline still needs to be recorded.
 
@@ -363,7 +348,9 @@ The proposal sets a **December 1 checkpoint**. The internal dates below are a su
 
 The pilot is an early integration milestone. The December 1 report should state actual instrument/day coverage and clearly identify any incomplete proposal deliverables.
 
-## 9. Collaboration and acceptance checklist
+## 8. Collaboration and acceptance checklist
+
+Anyone with availability can pick up the next task whose prerequisites are ready. Let the group know when starting a task to avoid duplicate work, and share progress and outputs so another teammate can continue it when needed.
 
 Use one branch per component, for example `feature/book-reconstruction` or `feature/hawkes`. Keep changes small enough to review. Each handoff should include the affected interface, an example input/output, verification evidence, and any data or configuration change. Record methodological decisions in `docs/decisions.md` and experimental outcomes in `docs/experiment_log.md`.
 
@@ -384,11 +371,11 @@ Before the final comparison:
 - [ ] Test findings are generated after the configuration is frozen.
 - [ ] Another teammate can reproduce the tables and figures from the saved run record.
 
-Open choices to settle at the first team meeting: exact dates and stock candidate universe; data delivery/access; eligible event levels and modification mapping; liquidity-regime and transition definitions; forecast frequency; simulation budget and unfinished-path policy; final owners; and final submission date.
+Open choices to settle at the first team meeting: exact dates and stock candidate universe; data delivery/access; eligible event levels and modification mapping; liquidity-regime and transition definitions; forecast frequency; simulation budget and unfinished-path policy; and final submission date.
 
-## 10. Reading list
+## 9. Reading list
 
-The following papers are listed in the proposal. Each component owner should document the specific definitions and assumptions adopted from their reading.
+The following papers are listed in the proposal. Document the specific definitions and assumptions adopted from the reading when implementing each component.
 
 - Zovko, I., and Farmer, J. D. (2002). *The power of patience: A behavioural regularity in limit-order placement.* Quantitative Finance, 2(5), 387-392. [DOI](https://doi.org/10.1088/1469-7688/2/5/308). Relevant to placement-distance tails.
 - Cont, R., Stoikov, S., and Talreja, R. (2010). *A stochastic model for order book dynamics.* Operations Research, 58(3), 549-563. [DOI](https://doi.org/10.1287/opre.1090.0780). Relevant to the Poisson queueing baseline.
