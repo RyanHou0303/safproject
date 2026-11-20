@@ -1,0 +1,10 @@
+{
+  "dataset": "XNAS.ITCH",
+  "schema": "mbo",
+  "symbols": ["SPY", "QQQ"],
+  "date_manifest": "data/metadata/splits.csv",
+  "timezone": "America/New_York",
+  "analysis_start": "09:45",
+  "analysis_end": "15:45",
+  "download_end": "15:50"
+}

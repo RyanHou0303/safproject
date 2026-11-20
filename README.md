@@ -4,7 +4,7 @@ This project studies whether clustered order arrivals improve prediction of the 
 
 We will reconstruct Nasdaq limit order books, study limit-order placement distances, and compare a Poisson queueing model, a queue-reactive model, and a Hawkes-driven model. A queue-imbalance logistic regression will serve as a predictive benchmark.
 
-**Current status:** the sample calendar and chronological split have been selected in [`data/metadata/splits.csv`](data/metadata/splits.csv). Market-data ingestion, reconstruction, models, and the commands below are not implemented yet. Other files and directories in the structure below remain planned. The research scope and December 1 checkpoint come from `proposal_v2.pdf`. The Python structure, interfaces, and intermediate schedule are proposed working choices for the team.
+**Current status:** the sample calendar and chronological split are recorded in [`data/metadata/splits.csv`](data/metadata/splits.csv). A Databento planning, quotation, and download tool is implemented in [`scripts/fetch_databento.py`](scripts/fetch_databento.py), with configuration, dependency pins, and focused offline tests. Market data has not been downloaded yet. Reconstruction, models, and the numbered research-pipeline scripts remain planned. The research scope and December 1 checkpoint come from `proposal_v2.pdf`. The Python structure, interfaces, and intermediate schedule are proposed working choices for the team.
 
 ## 1. Scope and research questions
 
@@ -88,9 +88,11 @@ safproject/
 ├── README.md
 ├── pyproject.toml                 # Package metadata, dependencies, developer tools
 ├── requirements.lock.txt          # Exact versions from the working environment
+├── requirements-data.txt          # Implemented: dependencies for the data downloader
 ├── .gitignore                    # Local credentials, environments, data, generated runs
 ├── .env.example                  # Variable names only; no real credentials
 ├── configs/
+│   ├── databento.json             # Implemented: acquisition settings and confirmed symbols
 │   ├── project.yaml              # Dates, instruments, sessions, splits, paths, seed
 │   ├── models.yaml               # Rate bins, state bins, Hawkes candidates, fitting settings
 │   └── evaluation.yaml           # Forecast grid, simulation budget, censoring, bootstrap
@@ -140,6 +142,7 @@ safproject/
 │       ├── bootstrap.py          # Paired resampling of whole trading days
 │       └── plots.py              # Consistent figures for diagnostics and final results
 ├── scripts/
+│   ├── fetch_databento.py         # Implemented: offline plan, free quote, paid download
 │   ├── 01_prepare_data.py        # Inventory raw files, map symbols, create split manifest
 │   ├── 02_reconstruct_books.py   # Replay, validate, and export events/quotes/queues
 │   ├── 03_build_features.py      # Features, regime labels, and forecast table
@@ -153,6 +156,7 @@ safproject/
 │   ├── 02_placement_tails.ipynb
 │   └── 03_model_diagnostics.ipynb
 ├── tests/
+│   ├── test_fetch_databento.py    # Implemented: budget, cache, interruption, coverage, DST
 │   ├── fixtures/                 # Small synthetic message sequences with known answers
 │   ├── test_book.py
 │   ├── test_events.py
@@ -320,6 +324,48 @@ For every run, save the resolved configurations, data-manifest checksum, code re
 
 ## 6. Environment and planned execution
 
+### Databento acquisition (implemented)
+
+The acquisition settings are in `configs/databento.json`. Only **SPY and QQQ** are confirmed; the other four stocks still need the training-period selection described above. The default full request therefore covers 120 symbol-days, not the final six-instrument sample. `--pilot` selects SPY on the first training day, August 27, 2026.
+
+Install the data dependencies and copy the environment template, then fill in `DATABENTO_API_KEY` locally. An existing environment variable takes precedence over `.env`.
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements-data.txt
+cp -n .env.example .env
+```
+
+These commands are implemented:
+
+```bash
+# Offline: inspect all 120 requests, without a key or API calls.
+python scripts/fetch_databento.py plan
+
+# Free metadata queries: verify coverage and estimate a one-day SPY pilot.
+python scripts/fetch_databento.py quote --pilot
+
+# Free metadata queries: quote all selected dates for SPY and QQQ.
+python scripts/fetch_databento.py quote
+```
+
+After reviewing the quote, use `download` with `--max-cost-usd` set to the team's authorized USD amount and the same date/symbol selection. A fresh quotation is checked against that ceiling before downloading. It is a preflight spending check, not an account-level billing cap. Account credits are not subtracted from the quote. The tool accepts `--symbols`, `--dates`, and `--split` to select a subset of the configured instruments and frozen calendar.
+
+Requests start at **00:00 UTC** for each selected date to retain the daily reset and pre-market history needed for reconstruction. They end at **15:50 America/New_York**, five minutes beyond the analysis window, with ten-minute-aligned UTC bounds. This also avoids the boundary-rounding overestimate described in the [cost API documentation](https://databento.com/docs/api-historical/metadata/metadata-get-cost?lang=python). The analysis window remains [09:45, 15:45) New York time; preserve source ordering when replaying the raw files.
+
+Raw files are streamed as compressed DBN to `data/raw/XNAS.ITCH/mbo/<symbol>/<date>.dbn.zst`. `SAF_DATA_DIR` or `--data-dir` can select another local/shared data root. Each completed file has a JSON receipt containing request parameters, compressed size, SHA-256 checksum, timestamp, and quote. Reruns verify and reuse completed files. Interrupted downloads keep a `.partial` file and are not retried automatically, because repeated streaming can incur another charge. Resolve a partial file or an inconsistent cache explicitly before retrying.
+
+The latest request plan, coverage report, and quote are saved locally under `data/metadata/databento/`. An unavailable or degraded selected date stops preflight without changing the calendar. Metadata queries are free; market-data delivery is billable according to [Databento's metered-pricing documentation](https://databento.com/docs/api-historical/basics/metered-pricing). The raw data, local reports, `.env`, and virtual environment are ignored by Git.
+
+Run the offline acquisition checks with:
+
+```bash
+python -m unittest discover -s tests -p 'test_fetch_databento.py'
+```
+
+### Full research pipeline (planned)
+
 The proposed stack is Python with NumPy/SciPy for numerical work, pandas or Polars with PyArrow for tabular data and Parquet, scikit-learn for logistic regression, Matplotlib for figures, PyYAML for configuration, and pytest for checks. Use the Databento SDK to read the source encoding where needed. Choose one primary table library and lock the working environment together.
 
 Once `pyproject.toml` and the scripts exist, the intended setup is:
@@ -348,7 +394,7 @@ python scripts/08_evaluate.py --config configs/project.yaml --eval configs/evalu
 
 Define `--pilot` as processing the listed training and validation subsets, fitting on the training subset only, and producing validation forecasts on the validation subset only. To scale up, rerun data preparation and processing without `--pilot`, then fit and validate under a new run ID. After freezing the selected configuration, run prediction and evaluation with `--split test` using the saved fitted models. Changing the split must not trigger refitting.
 
-For data access, inventory the team's existing raw files, record the Databento delivery format and access arrangements, and implement ingestion for that format before adding an optional downloader.
+For data access, use the acquisition tool above or inventory already obtained Databento files. The planned ingestion stage should read the cached DBN files and their receipts.
 
 ## 7. Schedule and deliverables
 

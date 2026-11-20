@@ -1,0 +1,13 @@
+.env
+.env.*
+!.env.example
+.venv/
+__pycache__/
+.pytest_cache/
+.DS_Store
+/data/raw/
+/data/processed/
+/data/metadata/databento/
+/artifacts/
+*.dbn
+*.dbn.zst
