@@ -335,7 +335,10 @@ python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements-data.txt
 cp -n .env.example .env
+git config core.hooksPath .githooks
 ```
+
+Put the real key only in the ignored `.env`; keep `.env.example` empty. The repository's pre-commit hook checks staged files for Databento keys and configured key assignments without printing credential values. It can also be run directly with `python scripts/check_secrets.py`.
 
 These commands are implemented:
 
