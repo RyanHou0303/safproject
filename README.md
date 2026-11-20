@@ -4,7 +4,7 @@ This project studies whether clustered order arrivals improve prediction of the 
 
 We will reconstruct Nasdaq limit order books, study limit-order placement distances, and compare a Poisson queueing model, a queue-reactive model, and a Hawkes-driven model. A queue-imbalance logistic regression will serve as a predictive benchmark.
 
-**Current status:** planning stage. At initial setup, this repository contains this README only. The directories, modules, commands, and outputs below are the implementation plan; they are not implemented yet. The research scope and December 1 checkpoint come from `proposal_v2.pdf`. The Python structure, interfaces, and intermediate schedule are proposed working choices for the team.
+**Current status:** the sample calendar and chronological split have been selected in [`data/metadata/splits.csv`](data/metadata/splits.csv). Market-data ingestion, reconstruction, models, and the commands below are not implemented yet. Other files and directories in the structure below remain planned. The research scope and December 1 checkpoint come from `proposal_v2.pdf`. The Python structure, interfaces, and intermediate schedule are proposed working choices for the team.
 
 ## 1. Scope and research questions
 
@@ -19,6 +19,23 @@ We will reconstruct Nasdaq limit order books, study limit-order placement distan
 | Stage 2 | Poisson and queue-reactive intensity estimation and queue simulation |
 | Stage 3 | Six-dimensional exponential-kernel Hawkes estimation, diagnostics, and simulation |
 | Evaluation | Brier score, log loss, calibration, and day-block bootstrap intervals |
+
+### Selected sample calendar
+
+**Selection date: November 20, 2026.** Use the most recent 60 completed, full Nasdaq trading sessions ending on November 19, 2026. This is a fixed sample, not a rolling window that changes when the pipeline is rerun. The same date manifest applies to all six instruments.
+
+| Split | First trading date | Last trading date | Sessions |
+| --- | --- | --- | --- |
+| Training | 2026-08-27 | 2026-10-22 | 40 |
+| Validation | 2026-10-23 | 2026-11-05 | 10 |
+| Test | 2026-11-06 | 2026-11-19 | 10 |
+| Total | 2026-08-27 | 2026-11-19 | 60 |
+
+Exclude weekends and September 7, 2026 (Labor Day). There are no scheduled early-close sessions within this interval according to the [Nasdaq trading calendar](https://www.nasdaqtrader.com/Trader.aspx?id=Calendar). The CSV contains one row per selected trading date with columns `trading_date` and `split`.
+
+Use Databento dataset `XNAS.ITCH` and schema `mbo`. **Calendar selection is complete; account-specific availability and daily data quality remain unverified.** Before obtaining market data, check the MBO range using [`get_dataset_range`](https://databento.com/docs/api-historical/metadata/metadata-get-dataset-range) and daily conditions using [`get_dataset_condition`](https://databento.com/docs/api-historical/metadata/metadata-get-dataset-condition). Record and resolve any unavailable or degraded days using a common quality policy before fitting; document any resulting calendar revision for all instruments together.
+
+Apply the analysis window as **[09:45, 15:45) America/New_York** each day. Its UTC equivalent is [13:45, 19:45) through October 30 and [14:45, 20:45) from November 2 onward. Convert each day's boundaries with the named time zone rather than a fixed UTC offset. Book reconstruction still requires the initialization history described in Step 1. A suggested first replay is SPY on August 27, a training day.
 
 The main questions are:
 
@@ -85,6 +102,7 @@ safproject/
 ├── data/                         # Local/shared storage; large files excluded from Git
 │   ├── raw/                      # Original MBO files, unchanged
 │   ├── metadata/                 # File inventory, calendar, symbol selection, quality summaries
+│   │   └── splits.csv            # Selected 60-session calendar and 40/10/10 split
 │   └── processed/
 │       ├── events/               # Canonical classified order events
 │       ├── quotes/               # Best quotes after complete exchange events
@@ -163,7 +181,7 @@ Each subpackage needs its own `__init__.py`. Create files as their work begins; 
 
 **Create first:** `pyproject.toml`, `.gitignore`, `.env.example`, the three configuration files, `docs/decisions.md`, and `docs/data_dictionary.md`.
 
-- Choose the 60 trading dates and record the 40/10/10 chronological split in `data/metadata/splits.csv`. Use the same dates for all instruments. Record a policy for shortened sessions and missing days.
+- Use the selected 60 trading dates and 40/10/10 chronological split in `data/metadata/splits.csv` for every instrument. Verify Databento coverage and record a common policy for missing, degraded, and shortened sessions before fitting. Document any necessary calendar revision.
 - Fix SPY and QQQ. Select the other four stocks from a documented candidate universe using training-period information only. Save the selection statistics in `data/metadata/instrument_selection.csv`.
 - Record how relative tick size is measured. A proposed definition is tick size divided by a training-period reference mid-price; retain spread-in-ticks, depth, and event-rate summaries alongside it.
 - Define liquidity regimes using observable spread, depth, and recent event rates. Fit thresholds on training data. Define transition windows using current and past observations, with the lookback and thresholds recorded in configuration.
@@ -354,7 +372,7 @@ Anyone with availability can pick up the next task whose prerequisites are ready
 
 Use one branch per component, for example `feature/book-reconstruction` or `feature/hawkes`. Keep changes small enough to review. Each handoff should include the affected interface, an example input/output, verification evidence, and any data or configuration change. Record methodological decisions in `docs/decisions.md` and experimental outcomes in `docs/experiment_log.md`.
 
-Keep secrets, `.venv/`, raw market data, large Parquet files, and generated run directories out of Git. Commit code, configuration templates, documentation, and synthetic fixtures. Keep report figures accessible through the agreed shared storage or selected small report assets.
+Keep secrets, `.venv/`, raw market data, large Parquet files, and generated run directories out of Git. Commit code, configuration templates, small metadata manifests such as `splits.csv`, documentation, and synthetic fixtures. Keep report figures accessible through the agreed shared storage or selected small report assets.
 
 Before the final comparison:
 
@@ -371,7 +389,7 @@ Before the final comparison:
 - [ ] Test findings are generated after the configuration is frozen.
 - [ ] Another teammate can reproduce the tables and figures from the saved run record.
 
-Open choices to settle at the first team meeting: exact dates and stock candidate universe; data delivery/access; eligible event levels and modification mapping; liquidity-regime and transition definitions; forecast frequency; simulation budget and unfinished-path policy; and final submission date.
+Open choices to settle at the first team meeting: stock candidate universe; data delivery/access and coverage verification for the selected dates; eligible event levels and modification mapping; liquidity-regime and transition definitions; forecast frequency; simulation budget and unfinished-path policy; and final submission date.
 
 ## 9. Reading list
 
