@@ -4,39 +4,93 @@ This project studies whether clustered order arrivals improve prediction of the 
 
 We will reconstruct Nasdaq limit order books, study limit-order placement distances, and compare a Poisson queueing model, a queue-reactive model, and a Hawkes-driven model. A queue-imbalance logistic regression will serve as a predictive benchmark.
 
-**Current status:** development starts with the [minimal synthetic MBO example](examples/minimal/README.md) and [version 1.0 data contract](docs/data_dictionary.md). The example runs offline through reference reconstruction, six event streams, exposure, features, and labels. No Databento market data has been downloaded, and paid acquisition is paused in configuration. The eventual real-data period and session count are undecided; 60 days is a candidate from the original proposal, not a requirement. Statistical models and the numbered production-pipeline scripts remain to be implemented.
-
-## Start here: the offline example
-
-```bash
-python3 scripts/run_minimal_example.py --check-expected
-```
-
-Python 3.10+ and the standard library are enough. No key or API request is needed. The 22 synthetic MBO records produce 18 complete book states, 11 canonical model events, 12 seconds of valid exposure, and 12 forecast rows (8 labeled, 4 censored). Expected answers are checked into `examples/minimal/expected/`; generated files go to `artifacts/minimal_example/`.
-
-Develop each model against these shared tables and IDs. The example fixes interfaces and known software behavior; it is too small and artificial for empirical research conclusions. Later replace the input with validated real observations while preserving the contract. The reference adapter can read local DBN, and `--parquet` writes explicitly typed Parquet when PyArrow is installed.
+**Current status:** planning stage. At initial setup, this repository contains this README only. The directories, modules, commands, and outputs below are the implementation plan; they are not implemented yet. The research scope and December 1 checkpoint come from `proposal_v2.pdf`. The Python structure, interfaces, and intermediate schedule are proposed working choices for the team.
 
 ## 1. Scope and research questions
 
-| Item | Research plan |
+| Item | Scope from the proposal |
 | --- | --- |
 | Data source | Databento Nasdaq TotalView-ITCH market-by-order data |
 | Instruments | SPY, QQQ, and four stocks selected using training-period spreads, displayed depth, and event rates to span relative tick sizes |
-| Sample | Configurable real-session sample, to be chosen later; 60 days remains a proposal candidate |
+| Sample | Number of trading days to be decided; the proposal suggests 60 |
 | Analysis window | 09:45-15:45, America/New_York |
-| Split | Chronological day-based train/validation/test manifest; counts are configurable |
+| Split | Chronological train/validation/test split; the proposal suggests 40/10/10 |
 | Stage 1 | Placement-distance tail estimation and cross-instrument comparisons |
 | Stage 2 | Poisson and queue-reactive intensity estimation and queue simulation |
 | Stage 3 | Six-dimensional exponential-kernel Hawkes estimation, diagnostics, and simulation |
 | Evaluation | Brier score, log loss, calibration, and day-block bootstrap intervals |
 
-### Real-data selection is deferred
+### What the Databento data looks like
 
-The earlier August 27-November 19, 2026 calendar and 40/10/10 split are retained in [`candidate_splits_60d.csv`](data/metadata/candidate_splits_60d.csv) only to reproduce the prior quotation. That list is not the selected development dataset or an acquisition commitment. Current decisions are recorded in [`docs/decisions.md`](docs/decisions.md).
+We plan to use dataset **`XNAS.ITCH`**, schema **`mbo`** (market by order). Each record describes an event affecting an individual order or reporting a trade. Replaying these records produces the order book, best bid/ask, and queue sizes needed by the models. We can retain the original compressed DBN files (`.dbn.zst`) and convert the required observations to Parquet later. See the [official MBO schema](https://databento.com/docs/schemas/mbo).
 
-When real data is needed, choose dates, instruments, and a budget, then supply a `trading_date,split` CSV through `--manifest` or configuration. Neither the data contract nor models should assume 60 sessions. Keep dates common across instruments within a comparison and freeze the chosen sample within that experiment. Validate it against the [exchange calendar](https://www.nasdaqtrader.com/Trader.aspx?id=Calendar), provider coverage, and data quality.
+The following **illustrative values** show how the records are organized. Prices are displayed in dollars and only selected fields are shown for readability; this is not downloaded market data. Times are UTC on January 2, 2025.
 
-The proposed real-session analysis window remains **[09:45, 15:45) America/New_York**. The synthetic example deliberately uses only 12 seconds. Convert real-session boundaries by named time zone, including daylight-saving changes, and retain initialization history before the analysis window.
+| Time | Sequence | Order ID | Action | Side | Price ($) | Size | Flags |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 14:45:00.000 | 1 | 1001 | A | B | 100.00 | 10 | 128 |
+| 14:45:00.100 | 2 | 2001 | A | A | 100.02 | 12 | 128 |
+| 14:45:00.200 | 3 | 0 | T | A | 100.00 | 4 | 0 |
+| 14:45:00.200 | 3 | 1001 | F | B | 100.00 | 4 | 0 |
+| 14:45:00.200 | 3 | 1001 | C | B | 100.00 | 4 | 128 |
+| 14:45:00.300 | 4 | 2001 | C | A | 100.02 | 2 | 128 |
+
+Read the example as follows:
+
+1. A buy order adds 10 shares at 100.00; a sell order adds 12 shares at 100.02.
+2. Sequence 3 reports an execution of 4 shares against buy order 1001. `T` is the trade print, `F` identifies the resting order that was filled, and `C` removes its shares. Apply the reduction once, leaving 6 bid shares. This is an execution, not an additional cancellation arrival.
+3. Sequence 4 is a regular cancellation of 2 sell shares, leaving 10 ask shares.
+
+For Nasdaq, normalized records from the same source message share a sequence. A displayed execution normally produces `T -> F -> C`; a non-printable execution may omit `T`. Replacing an order produces `C` for the old order followed by `A` for the new one. See the [Nasdaq normalization rules](https://databento.com/docs/datasets/xnas-itch).
+
+The first addition above can be represented with the full field set below, keeping timestamps and prices in their raw integer units:
+
+```json
+{
+  "ts_recv": 1735829100000001000,
+  "ts_event": 1735829100000000000,
+  "rtype": 160,
+  "publisher_id": 2,
+  "instrument_id": 12345,
+  "action": "A",
+  "side": "B",
+  "price": 100000000000,
+  "size": 10,
+  "channel_id": 0,
+  "order_id": 1001,
+  "flags": 128,
+  "ts_in_delta": 1000,
+  "sequence": 1
+}
+```
+
+The fields we need to understand first are:
+
+| Field | Meaning for our project |
+| --- | --- |
+| `ts_event`, `ts_recv` | Exchange and capture timestamps, in Unix nanoseconds. Keep them as integers. |
+| `instrument_id` | Numeric instrument identifier; use symbol-mapping metadata to associate it with a ticker. |
+| `order_id` | Identifier used to track a resting order through its lifetime. Keep it as an unsigned 64-bit integer. |
+| `action` | `A`: add; `C`: cancel/reduce; `R`: clear book; `T`: trade; `F`: fill; `M`: modify; `N`: no mutation. |
+| `side` | `B`: bid/buy; `A`: ask/sell; `N`: unspecified. A trade reports the aggressor side; a fill reports the resting side. |
+| `price` | Fixed-point integer: divide by `1e9` for dollars. `100000000000` means 100.00. |
+| `size` | Quantity associated with the record; for a cancellation, the shares to remove. |
+| `sequence` | Source-message sequence, useful for preserving order and linking execution-related records. |
+| `flags` | Bit field. Bit 128 (`F_LAST`) marks the last record of an event for that instrument. Inspect book state after this boundary. |
+| Other fields | Preserve `rtype`, `publisher_id`, `channel_id`, and `ts_in_delta` as source metadata. |
+
+Price/timestamp formatting can differ between DBN and readable CSV/JSON exports. Confirm the chosen export settings rather than assuming every CSV uses the integer representation shown here. Follow the [provider field conventions](https://databento.com/docs/conventions/common-fields-enums-types).
+
+This tells us what the team needs to develop:
+
+| Planned component | Input | Output |
+| --- | --- | --- |
+| Ingestion and book replay | Ordered MBO records plus instrument metadata | Validated orders, best quotes, and displayed queue sizes |
+| Event classification | Linked additions, fills, and reductions | Six streams: additions, executions, and cancellations on each resting side |
+| Features and labels | Reconstructed book states | Spread, imbalance, placement distances, and direction of the next mid-price move |
+| Model fitting and simulation | Those streams, states, features, and labels | Fitted arrival models and comparable prediction probabilities |
+
+These are planned development tasks. Use this example to agree on field meanings and processing rules before implementing the pipeline.
 
 The main questions are:
 
@@ -50,11 +104,7 @@ The prediction target is a Nasdaq venue mid-price change. A claim about detectin
 ## 2. End-to-end workflow
 
 ```text
-Agree on data contract and synthetic expected answers
-                        |
-Develop model interfaces and mathematical/unit checks offline
-                        |
-Choose real dates, instruments, chronological splits, and budget
+Freeze dates, data conventions, and experiment settings
                         |
 Obtain raw MBO files and record their provenance
                         |
@@ -80,7 +130,7 @@ Build features, liquidity regimes, and shared forecast labels
                                Figures, report, presentation
 ```
 
-Start with the checked-in synthetic example. Once interfaces and numerical behavior are verified, choose a real pilot and an appropriately sized training/validation/test sample. Scale the observation count without changing model-facing columns. Keep final test observations out of model selection.
+Start with **one instrument and one training day**. After reconstruction passes its checks, expand to a small pilot with separate training and validation subsets drawn from their respective full-sample splits. Keep test days outside the pilot, then process the full sample. Model development can proceed in parallel once the data interfaces and a small fixture are stable.
 
 After the fixture and schema are frozen, tail analysis, baseline fitting, and Hawkes fitting can use the same processed data. Simulator development starts with synthetic rates and queues; evaluation starts with synthetic prediction tables. Integrate these components on the pilot before full-data fitting.
 
@@ -93,28 +143,20 @@ safproject/
 ├── README.md
 ├── pyproject.toml                 # Package metadata, dependencies, developer tools
 ├── requirements.lock.txt          # Exact versions from the working environment
-├── requirements-data.txt          # Implemented: dependencies for the data downloader
 ├── .gitignore                    # Local credentials, environments, data, generated runs
 ├── .env.example                  # Variable names only; no real credentials
 ├── configs/
-│   ├── databento.json             # Implemented: acquisition settings and confirmed symbols
 │   ├── project.yaml              # Dates, instruments, sessions, splits, paths, seed
 │   ├── models.yaml               # Rate bins, state bins, Hawkes candidates, fitting settings
 │   └── evaluation.yaml           # Forecast grid, simulation budget, censoring, bootstrap
 ├── docs/
 │   ├── proposal_v2.pdf            # Team copy of the original proposal
-│   ├── decisions.md              # Implemented: model-first development; acquisition paused
-│   ├── data_dictionary.md        # Implemented: version 1.0 data contract
+│   ├── decisions.md              # Frozen conventions and reasons for changes
+│   ├── data_dictionary.md        # Schemas, units, event mapping, timestamp conventions
 │   └── experiment_log.md         # Run IDs, configurations, outcomes, known limitations
-├── examples/minimal/             # Implemented: shared synthetic development dataset
-│   ├── README.md                 # Hand-worked book and model input walkthrough
-│   ├── mbo.csv                   # 22 synthetic records with provider field names
-│   ├── metadata.json             # Units, instrument mapping, observation window, provenance
-│   └── expected/                 # Checked-in derived CSV/JSON reference answers
 ├── data/                         # Local/shared storage; large files excluded from Git
 │   ├── raw/                      # Original MBO files, unchanged
 │   ├── metadata/                 # File inventory, calendar, symbol selection, quality summaries
-│   │   └── candidate_splits_60d.csv # Archived quotation candidate; not a requirement
 │   └── processed/
 │       ├── events/               # Canonical classified order events
 │       ├── quotes/               # Best quotes after complete exchange events
@@ -126,9 +168,7 @@ safproject/
 │   ├── config.py                 # Load and validate configuration; resolve paths
 │   ├── data/
 │   │   ├── __init__.py
-│   │   ├── ingest.py             # Implemented: local integer CSV/DBN reader
-│   │   ├── reference.py          # Implemented: readable single-session reference replay
-│   │   ├── schema.py             # Implemented: model-facing types and nullability
+│   │   ├── ingest.py             # Read DBN/MBO data; retain source metadata and ordering
 │   │   ├── book.py               # Orders, price levels, queue state, and message application
 │   │   ├── events.py             # Link execution records; derive canonical event streams
 │   │   ├── validate.py           # Book invariants, data-quality checks, daily summaries
@@ -154,8 +194,6 @@ safproject/
 │       ├── bootstrap.py          # Paired resampling of whole trading days
 │       └── plots.py              # Consistent figures for diagnostics and final results
 ├── scripts/
-│   ├── run_minimal_example.py    # Implemented: complete offline example flow
-│   ├── fetch_databento.py         # Implemented: offline plan, free quote, paid download
 │   ├── 01_prepare_data.py        # Inventory raw files, map symbols, create split manifest
 │   ├── 02_reconstruct_books.py   # Replay, validate, and export events/quotes/queues
 │   ├── 03_build_features.py      # Features, regime labels, and forecast table
@@ -169,8 +207,6 @@ safproject/
 │   ├── 02_placement_tails.ipynb
 │   └── 03_model_diagnostics.ipynb
 ├── tests/
-│   ├── test_minimal_example.py   # Implemented: known answers, causality, DBN/Parquet
-│   ├── test_fetch_databento.py    # Implemented: budget, cache, interruption, coverage, DST
 │   ├── fixtures/                 # Small synthetic message sequences with known answers
 │   ├── test_book.py
 │   ├── test_events.py
@@ -197,9 +233,9 @@ Each subpackage needs its own `__init__.py`. Create files as their work begins; 
 
 ### Step 0: Freeze the experiment and set up the repository
 
-**Available now:** package metadata, the offline example, versioned data contract, local acquisition tool, environment template, and credential checks. Create the remaining model/evaluation configuration as those components are implemented.
+**Create first:** `pyproject.toml`, `.gitignore`, `.env.example`, the three configuration files, `docs/decisions.md`, and `docs/data_dictionary.md`.
 
-- Develop against the shared synthetic fixture first. Before an empirical experiment, choose a configurable chronological date manifest and common policy for missing, degraded, and shortened sessions. Verify coverage and record the selected sample without embedding its size in model code.
+- Choose the trading dates and chronological train/validation/test split, then record them in `data/metadata/splits.csv`. The final sample size is not fixed. Use the same dates for all instruments and record a policy for shortened sessions and missing days.
 - Fix SPY and QQQ. Select the other four stocks from a documented candidate universe using training-period information only. Save the selection statistics in `data/metadata/instrument_selection.csv`.
 - Record how relative tick size is measured. A proposed definition is tick size divided by a training-period reference mid-price; retain spread-in-ticks, depth, and event-rate summaries alongside it.
 - Define liquidity regimes using observable spread, depth, and recent event rates. Fit thresholds on training data. Define transition windows using current and past observations, with the lookback and thresholds recorded in configuration.
@@ -301,25 +337,24 @@ Use six event streams: **bid additions, ask additions, bid executions, ask execu
 2. Score the same eligible forecast rows using Brier score and log loss. Record any numerical probability clipping; plot calibration curves with bin counts.
 3. Report results overall, by instrument, by relative tick-size group, by liquidity regime, and near the predefined regime transitions. Include day counts, forecast counts, and coverage.
 4. Report paired score differences between models. For uncertainty, resample whole trading days and recompute differences using the same sampled days for all models; preserve the cross-instrument observations within each sampled date.
-5. State the aggregation rule, such as equal weight per instrument-day, and show whether conclusions change under forecast-weighted aggregation. Small held-out day counts limit the precision of subgroup conclusions.
+5. State the aggregation rule, such as equal weight per instrument-day, and show whether conclusions change under forecast-weighted aggregation. A small number of test days limits the precision of subgroup conclusions.
 6. Write the report around effect sizes, uncertainty, calibration, and data/model limitations, including when Hawkes does not improve prediction.
 
 **Done when:** a saved run produces all report tables and figures, all models are compared on the same documented sample, and the report distinguishes validation choices from final test findings.
 
 ## 5. Shared data and model interfaces
 
-Use the implemented [version 1.0 contract](docs/data_dictionary.md) for separate model implementations. The runner exports exact types and nullability to `schema.json`. The example's session metadata supplies symbol/date/venue partition dimensions; larger datasets can materialize those dimensions in their Parquet partitions.
+Agree on these contracts before separate model implementations. The full types, null rules, and uniqueness constraints belong in `docs/data_dictionary.md`.
 
 | Dataset | Required contents and convention |
 | --- | --- |
 | Raw inventory | `symbol`, `trading_date`, source/dataset, file path, checksum, coverage, original record count |
-| Split manifest | One `split` per chosen real trading date; session count and split sizes are configurable |
-| Canonical events | `event_id`, state-before/state-after IDs, times, six-stream type/index, resting side, price/size marks, placement distance, and raw-record linkage |
-| Quotes | Complete `state_id`, exchange/capture times, exact best prices and twice-mid representation, best sizes, recovery epoch, validity |
-| Queues | State ID, resting side, level, price, displayed size, order count; raw order history is still needed for full L3 simulation |
-| Exposure | State ID, clipped start/end, valid duration, and queue sizes |
-| Features | `forecast_id`, as-of state/time, imbalance, spread, and queue sizes; extend later with documented past-only predictors |
-| Forecasts | `forecast_id`, nullable `y_up` and next-move time, explicit censoring flag/reason; no target columns in features |
+| Split manifest | Exactly one `split` per trading date; choose the number of sessions in each split later |
+| Canonical events | Unique `event_id`, `logical_event_id`, source-record linkage, symbol/date, UTC event time, record order, raw action, canonical type, resting side, price, size, level/placement information, quality flags |
+| Quotes | Symbol/date, completed-event ID/time, best bid/ask prices, best sizes, spread, mid-price, validity |
+| Queues | Completed-event ID/time, side, price level, price, displayed size, order count; enough state to initialize the selected simulator |
+| Features | `forecast_id`, as-of event ID/time, imbalance, spread, depth, past event-rate features, time-of-day, tick group, liquidity regime, transition flag |
+| Forecasts | Unique `forecast_id`, symbol/date, time, split, `y_up`, next-move time, censoring reason, common eligibility flag |
 | Predictions | Unique `(run_id, model, forecast_id)`, `p_up`, status, simulation path count, unfinished-path count, seed |
 
 Store timestamps in UTC with nanosecond precision; derive session boundaries and trading dates with `America/New_York` so daylight-saving changes are handled. Retain provider fixed-point price integers and scale metadata during reconstruction. Handle undefined-price sentinels explicitly. The source fields and units are described in the [MBO schema](https://databento.com/docs/schemas/mbo).
@@ -339,51 +374,6 @@ For every run, save the resolved configurations, data-manifest checksum, code re
 
 ## 6. Environment and planned execution
 
-### Databento acquisition (implemented)
-
-**Paid downloads are disabled** by `downloads_enabled: false` in `configs/databento.json`. Use the offline fixture for current development. The acquisition settings retain SPY/QQQ and the archived 60-day quotation candidate; `plan` therefore describes that candidate by default, not a committed sample. `--manifest` accepts another session count and split. `--pilot` selects the first training day in that chosen manifest.
-
-Install the data dependencies and copy the environment template, then fill in `DATABENTO_API_KEY` locally. An existing environment variable takes precedence over `.env`.
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -r requirements-data.txt
-cp -n .env.example .env
-git config core.hooksPath .githooks
-```
-
-Put the real key only in the ignored `.env`; keep `.env.example` empty. The repository's pre-commit hook checks staged files for Databento keys and configured key assignments without printing credential values. It can also be run directly with `python scripts/check_secrets.py`.
-
-These commands are implemented:
-
-```bash
-# Offline: inspect the archived quotation candidate, without API calls.
-python scripts/fetch_databento.py plan
-
-# Optional free metadata query for a candidate one-day SPY pilot.
-python scripts/fetch_databento.py quote --pilot
-
-# Optional free metadata query for the configured candidate dates and symbols.
-python scripts/fetch_databento.py quote
-```
-
-Only when acquisition is explicitly resumed, select the sample, review a new quote, and enable downloads in configuration. `download` additionally requires `--max-cost-usd`; a fresh quotation is checked before downloading. This is a preflight spending check, not an account-level billing cap. Account credits are not subtracted from the quote. The tool accepts `--manifest`, `--symbols`, `--dates`, and `--split`, with no fixed session count.
-
-Requests start at **00:00 UTC** for each selected date to retain the daily reset and pre-market history needed for reconstruction. They end at **15:50 America/New_York**, five minutes beyond the analysis window, with ten-minute-aligned UTC bounds. This also avoids the boundary-rounding overestimate described in the [cost API documentation](https://databento.com/docs/api-historical/metadata/metadata-get-cost?lang=python). The analysis window remains [09:45, 15:45) New York time; preserve source ordering when replaying the raw files.
-
-Raw files are streamed as compressed DBN to `data/raw/XNAS.ITCH/mbo/<symbol>/<date>.dbn.zst`. `SAF_DATA_DIR` or `--data-dir` can select another local/shared data root. Each completed file has a JSON receipt containing request parameters, compressed size, SHA-256 checksum, timestamp, and quote. Reruns verify and reuse completed files. Interrupted downloads keep a `.partial` file and are not retried automatically, because repeated streaming can incur another charge. Resolve a partial file or an inconsistent cache explicitly before retrying.
-
-The latest request plan, coverage report, and quote are saved locally under `data/metadata/databento/`. An unavailable or degraded selected date stops preflight without changing the calendar. Metadata queries are free; market-data delivery is billable according to [Databento's metered-pricing documentation](https://databento.com/docs/api-historical/basics/metered-pricing). The raw data, local reports, `.env`, and virtual environment are ignored by Git.
-
-Run the offline acquisition checks with:
-
-```bash
-python -m unittest discover -s tests -p 'test_fetch_databento.py'
-```
-
-### Full research pipeline (planned)
-
 The proposed stack is Python with NumPy/SciPy for numerical work, pandas or Polars with PyArrow for tabular data and Parquet, scikit-learn for logistic regression, Matplotlib for figures, PyYAML for configuration, and pytest for checks. Use the Databento SDK to read the source encoding where needed. Choose one primary table library and lock the working environment together.
 
 Once `pyproject.toml` and the scripts exist, the intended setup is:
@@ -391,11 +381,11 @@ Once `pyproject.toml` and the scripts exist, the intended setup is:
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install -e .
-python -m unittest discover -s tests
+python -m pip install -e ".[dev]"
+python -m pytest
 ```
 
-The minimal package currently needs only the standard library. Add and pin numerical/model dependencies as they are selected. Use the existing `.env.example` for variable names; real values stay in local environment variables or an ignored `.env`. Reading local fixture/DBN files does not need an API key. Keep future model configuration consistent with the data contract.
+The `[dev]` extra must include the test/developer dependencies. Create `.env.example` with names such as `DATABENTO_API_KEY` and `SAF_DATA_DIR`; real values stay in local environment variables or an ignored `.env`. Reading already obtained local files should not require an API key. Configure data locations consistently in `project.yaml`.
 
 **Planned command contract:** implement these flags in the scripts. These examples will work only after the corresponding files have been created. Use the same run ID throughout a run. List `pilot_training_dates` and `pilot_validation_dates` in `project.yaml`, and validate them against the full split manifest.
 
@@ -412,7 +402,7 @@ python scripts/08_evaluate.py --config configs/project.yaml --eval configs/evalu
 
 Define `--pilot` as processing the listed training and validation subsets, fitting on the training subset only, and producing validation forecasts on the validation subset only. To scale up, rerun data preparation and processing without `--pilot`, then fit and validate under a new run ID. After freezing the selected configuration, run prediction and evaluation with `--split test` using the saved fitted models. Changing the split must not trigger refitting.
 
-For data access, use the acquisition tool above or inventory already obtained Databento files. The planned ingestion stage should read the cached DBN files and their receipts.
+For data access, inventory the team's existing raw files, record the Databento delivery format and access arrangements, and implement ingestion for that format before adding an optional downloader.
 
 ## 7. Schedule and deliverables
 
@@ -436,11 +426,11 @@ Anyone with availability can pick up the next task whose prerequisites are ready
 
 Use one branch per component, for example `feature/book-reconstruction` or `feature/hawkes`. Keep changes small enough to review. Each handoff should include the affected interface, an example input/output, verification evidence, and any data or configuration change. Record methodological decisions in `docs/decisions.md` and experimental outcomes in `docs/experiment_log.md`.
 
-Keep secrets, `.venv/`, raw market data, large Parquet files, and generated run directories out of Git. Commit code, configuration templates, small date manifests, documentation, and synthetic fixtures. Keep report figures accessible through the agreed shared storage or selected small report assets.
+Keep secrets, `.venv/`, raw market data, large Parquet files, and generated run directories out of Git. Commit code, configuration templates, documentation, and synthetic fixtures. Keep report figures accessible through the agreed shared storage or selected small report assets.
 
 Before the final comparison:
 
-- [ ] The chosen real-session manifest and chronological split are fixed per experiment, reproducible, and independent of model implementation.
+- [ ] The chosen trading calendar and chronological split are fixed for the experiment and reproducible.
 - [ ] Stock selection, regime thresholds, feature scaling, state bins, and shared mark distributions use training information only.
 - [ ] Execution-related records cannot reduce a queue or count an execution twice.
 - [ ] Prices, timestamps, sessions, event boundaries, and source ordering are documented.
@@ -453,7 +443,7 @@ Before the final comparison:
 - [ ] Test findings are generated after the configuration is frozen.
 - [ ] Another teammate can reproduce the tables and figures from the saved run record.
 
-Open choices before empirical research: actual instruments, dates/session count, chronological split, data budget and coverage; production handling of unsupported feed cases; liquidity-regime and transition definitions; real-data forecast frequency; simulation budget and unfinished-path policy; and final submission date.
+Open choices to settle at the first team meeting: sample size, exact dates, chronological split, and stock candidate universe; data delivery/access; eligible event levels and modification mapping; liquidity-regime and transition definitions; forecast frequency; simulation budget and unfinished-path policy; and final submission date.
 
 ## 9. Reading list
 
