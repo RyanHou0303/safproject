@@ -1,0 +1,67 @@
+{
+  "contract_version": "1.0",
+  "synthetic": true,
+  "stream_order": [
+    "limit_bid",
+    "limit_ask",
+    "execution_bid",
+    "execution_ask",
+    "cancel_bid",
+    "cancel_ask"
+  ],
+  "observation_end_s": 12.0,
+  "event_times_s": {
+    "limit_bid": [
+      0.1,
+      8.0,
+      10.0
+    ],
+    "limit_ask": [
+      1.0,
+      9.0
+    ],
+    "execution_bid": [
+      4.0
+    ],
+    "execution_ask": [
+      5.0
+    ],
+    "cancel_bid": [
+      2.0,
+      7.0
+    ],
+    "cancel_ask": [
+      3.0,
+      6.0
+    ]
+  },
+  "counts": [
+    3,
+    2,
+    1,
+    1,
+    2,
+    2
+  ],
+  "valid_exposure_s": 12.0,
+  "illustrative_poisson_mle_per_s": [
+    0.25,
+    0.16666666666666666,
+    0.08333333333333333,
+    0.08333333333333333,
+    0.16666666666666666,
+    0.16666666666666666
+  ],
+  "positive_placement_distances_ticks": [
+    1,
+    2
+  ],
+  "logistic_features": [
+    "imbalance"
+  ],
+  "queue_reactive_state": [
+    "bid_size",
+    "ask_size"
+  ],
+  "labeled_forecasts": 8
+}

@@ -1,8 +1,9 @@
 {
   "dataset": "XNAS.ITCH",
   "schema": "mbo",
+  "downloads_enabled": false,
   "symbols": ["SPY", "QQQ"],
-  "date_manifest": "data/metadata/splits.csv",
+  "date_manifest": "data/metadata/candidate_splits_60d.csv",
   "timezone": "America/New_York",
   "analysis_start": "09:45",
   "analysis_end": "15:45",

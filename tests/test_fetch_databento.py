@@ -5,7 +5,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -26,6 +26,23 @@ def quoted(item):
 
 
 class DownloadTests(unittest.TestCase):
+    def test_user_pause_blocks_paid_download_before_creating_a_client(self):
+        sdk = SimpleNamespace(Historical=Mock())
+        dotenv = SimpleNamespace(load_dotenv=Mock())
+        with patch.dict('sys.modules', {'databento': sdk, 'dotenv': dotenv}):
+            with self.assertRaisesRegex(ValueError, 'Downloads are paused'):
+                fetch.main(['download', '--max-cost-usd', '156'])
+        sdk.Historical.assert_not_called()
+
+    def test_three_session_manifest_needs_no_sixty_day_assumption(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "dates.csv"
+            path.write_text('trading_date,split\n2025-01-02,train\n2025-01-03,validation\n2025-01-06,test\n')
+            rows = fetch.read_dates(path)
+            requests = fetch.build_requests(CONFIG, rows, ["SPY"])
+        self.assertEqual(len(requests), 3)
+        self.assertEqual([r["split"] for r in requests], ["train", "validation", "test"])
+
     def test_concurrent_metadata_quotes_keep_request_order_and_exact_totals(self):
         requests = fetch.build_requests(CONFIG, [{"trading_date": "2026-08-27", "split": "train"}],
                                         ["SPY", "QQQ"])

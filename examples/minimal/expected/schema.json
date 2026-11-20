@@ -1,0 +1,255 @@
+{
+  "contract_version": "1.0",
+  "raw_integer_csv": {
+    "ts_recv": "uint64",
+    "ts_event": "uint64",
+    "rtype": "uint8",
+    "publisher_id": "uint16",
+    "instrument_id": "uint32",
+    "action": "string",
+    "side": "string",
+    "price": "int64",
+    "size": "uint32",
+    "channel_id": "uint8",
+    "order_id": "uint64",
+    "flags": "uint8",
+    "ts_in_delta": "int32",
+    "sequence": "uint32"
+  },
+  "tables": {
+    "events": {
+      "event_id": {
+        "type": "string",
+        "nullable": false
+      },
+      "state_before_id": {
+        "type": "string",
+        "nullable": false
+      },
+      "state_after_id": {
+        "type": "string",
+        "nullable": false
+      },
+      "ts_event_ns": {
+        "type": "uint64",
+        "nullable": false
+      },
+      "t_rel_s": {
+        "type": "float64",
+        "nullable": false
+      },
+      "event_type": {
+        "type": "string",
+        "nullable": false
+      },
+      "event_type_id": {
+        "type": "uint8",
+        "nullable": false
+      },
+      "side": {
+        "type": "string",
+        "nullable": false
+      },
+      "price_int": {
+        "type": "int64",
+        "nullable": false
+      },
+      "size": {
+        "type": "uint32",
+        "nullable": false
+      },
+      "order_id": {
+        "type": "uint64",
+        "nullable": false
+      },
+      "placement_distance_ticks": {
+        "type": "int32",
+        "nullable": true
+      },
+      "source_record_index": {
+        "type": "uint64",
+        "nullable": false
+      },
+      "book_update_record_index": {
+        "type": "uint64",
+        "nullable": false
+      },
+      "source_sequence": {
+        "type": "uint32",
+        "nullable": false
+      }
+    },
+    "quotes": {
+      "state_id": {
+        "type": "string",
+        "nullable": false
+      },
+      "ts_event_ns": {
+        "type": "uint64",
+        "nullable": false
+      },
+      "ts_recv_ns": {
+        "type": "uint64",
+        "nullable": false
+      },
+      "epoch": {
+        "type": "uint32",
+        "nullable": false
+      },
+      "bid_price_int": {
+        "type": "int64",
+        "nullable": true
+      },
+      "ask_price_int": {
+        "type": "int64",
+        "nullable": true
+      },
+      "bid_size": {
+        "type": "int64",
+        "nullable": false
+      },
+      "ask_size": {
+        "type": "int64",
+        "nullable": false
+      },
+      "mid_price_x2": {
+        "type": "int64",
+        "nullable": true
+      },
+      "book_valid": {
+        "type": "bool",
+        "nullable": false
+      }
+    },
+    "queues": {
+      "state_id": {
+        "type": "string",
+        "nullable": false
+      },
+      "side": {
+        "type": "string",
+        "nullable": false
+      },
+      "level": {
+        "type": "uint32",
+        "nullable": false
+      },
+      "price_int": {
+        "type": "int64",
+        "nullable": false
+      },
+      "size": {
+        "type": "int64",
+        "nullable": false
+      },
+      "order_count": {
+        "type": "uint32",
+        "nullable": false
+      }
+    },
+    "exposure": {
+      "state_id": {
+        "type": "string",
+        "nullable": false
+      },
+      "start_ns": {
+        "type": "uint64",
+        "nullable": false
+      },
+      "end_ns": {
+        "type": "uint64",
+        "nullable": false
+      },
+      "dt_s": {
+        "type": "float64",
+        "nullable": false
+      },
+      "bid_size": {
+        "type": "int64",
+        "nullable": false
+      },
+      "ask_size": {
+        "type": "int64",
+        "nullable": false
+      }
+    },
+    "features": {
+      "forecast_id": {
+        "type": "string",
+        "nullable": false
+      },
+      "state_id": {
+        "type": "string",
+        "nullable": false
+      },
+      "forecast_ts_ns": {
+        "type": "uint64",
+        "nullable": false
+      },
+      "t_rel_s": {
+        "type": "float64",
+        "nullable": false
+      },
+      "bid_price_int": {
+        "type": "int64",
+        "nullable": true
+      },
+      "ask_price_int": {
+        "type": "int64",
+        "nullable": true
+      },
+      "bid_size": {
+        "type": "int64",
+        "nullable": false
+      },
+      "ask_size": {
+        "type": "int64",
+        "nullable": false
+      },
+      "mid_price_x2": {
+        "type": "int64",
+        "nullable": true
+      },
+      "spread_ticks": {
+        "type": "int32",
+        "nullable": true
+      },
+      "imbalance": {
+        "type": "float64",
+        "nullable": true
+      },
+      "feature_valid": {
+        "type": "bool",
+        "nullable": false
+      }
+    },
+    "forecasts": {
+      "forecast_id": {
+        "type": "string",
+        "nullable": false
+      },
+      "y_up": {
+        "type": "uint8",
+        "nullable": true
+      },
+      "next_move_ts_ns": {
+        "type": "uint64",
+        "nullable": true
+      },
+      "censored": {
+        "type": "bool",
+        "nullable": false
+      },
+      "censor_reason": {
+        "type": "string",
+        "nullable": false
+      }
+    }
+  },
+  "prediction_columns": {
+    "forecast_id": "string",
+    "model": "string",
+    "run_id": "string",
+    "p_up": "float64"
+  }
+}

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Plan, quote, and cache historical MBO requests for the frozen date manifest."""
+"""Plan, quote, and cache historical MBO requests for a configurable date manifest."""
 
 from __future__ import annotations
 
@@ -254,10 +254,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("action", choices=["plan", "quote", "download"])
     parser.add_argument("--config", type=Path, default=ROOT / "configs/databento.json")
     parser.add_argument("--data-dir", type=Path)
+    parser.add_argument("--manifest", type=Path, help="Override the configured trading_date,split CSV; any session count")
     parser.add_argument("--symbols", nargs="+")
     selection = parser.add_mutually_exclusive_group()
     selection.add_argument("--pilot", action="store_true", help="First training day, SPY by default")
-    selection.add_argument("--dates", nargs="+", help="Explicit dates from the frozen manifest")
+    selection.add_argument("--dates", nargs="+", help="Explicit dates from the selected manifest")
     parser.add_argument("--split", choices=["train", "validation", "test", "all"], default="all")
     parser.add_argument("--max-cost-usd", type=Decimal, help="Required for paid download; checked against a fresh quote")
     args = parser.parse_args(argv)
@@ -271,12 +272,18 @@ def main(argv: list[str] | None = None) -> int:
     else:
         load_dotenv(ROOT / ".env", override=False)
     config = json.loads(args.config.read_text())
-    rows = read_dates(ROOT / config["date_manifest"])
+    if args.action == "download" and not config.get("downloads_enabled", False):
+        raise ValueError("Downloads are paused in configs/databento.json. Select the real sample and "
+                         "explicitly resume acquisition before enabling paid downloads.")
+    manifest = args.manifest or Path(config["date_manifest"])
+    if not manifest.is_absolute():
+        manifest = ROOT / manifest
+    rows = read_dates(manifest)
     if args.pilot:
         rows = [next(row for row in rows if row["split"] == "train")]
     elif args.dates:
         if not set(args.dates) <= {row["trading_date"] for row in rows}:
-            raise ValueError("Requested dates must belong to the frozen manifest.")
+            raise ValueError("Requested dates must belong to the selected manifest.")
         rows = [row for row in rows if row["trading_date"] in args.dates]
     if args.split != "all":
         rows = [row for row in rows if row["split"] == args.split]
@@ -287,7 +294,7 @@ def main(argv: list[str] | None = None) -> int:
         data_dir = ROOT / data_dir
     output_dir = data_dir / "metadata" / "databento"
     write_json(output_dir / "request_plan.json", {
-        "created_at": utc_string(datetime.now(UTC)), "manifest_sha256": checksum(ROOT / config["date_manifest"]),
+        "created_at": utc_string(datetime.now(UTC)), "manifest_sha256": checksum(manifest),
         "requests": requests,
     })
     print(f'{len(requests)} requests; symbols: {", ".join(symbols)}; '
