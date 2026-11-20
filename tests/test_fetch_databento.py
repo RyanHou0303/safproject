@@ -26,6 +26,24 @@ def quoted(item):
 
 
 class DownloadTests(unittest.TestCase):
+    def test_concurrent_metadata_quotes_keep_request_order_and_exact_totals(self):
+        requests = fetch.build_requests(CONFIG, [{"trading_date": "2026-08-27", "split": "train"}],
+                                        ["SPY", "QQQ"])
+
+        def make_client():
+            return SimpleNamespace(metadata=SimpleNamespace(
+                get_cost=lambda **kwargs: "0.10" if kwargs["symbols"] == ["SPY"] else "0.20",
+                get_billable_size=lambda **kwargs: 100,
+                get_record_count=lambda **kwargs: 2,
+            ))
+
+        with TemporaryDirectory() as directory:
+            quote = fetch.quote_requests(None, requests, Path(directory),
+                                         client_factory=make_client, workers=2)
+        self.assertEqual([item["request"]["symbol"] for item in quote["requests"]], ["SPY", "QQQ"])
+        self.assertEqual(Decimal(quote["remaining_cost_usd"]), Decimal("0.30"))
+        self.assertEqual(quote["remaining_billable_bytes"], 200)
+
     def test_windows_keep_initialization_and_handle_daylight_saving(self):
         summer = request("2026-10-30")
         winter = request("2026-11-02")

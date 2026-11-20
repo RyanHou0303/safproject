@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import csv
 from datetime import date, datetime, time, timezone
 from decimal import Decimal
@@ -15,6 +16,7 @@ import os
 from pathlib import Path
 import re
 import sys
+import threading
 from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -150,28 +152,51 @@ def check_coverage(client, requests: list[dict], output_dir: Path) -> None:
         raise ValueError("Coverage check failed; calendar unchanged. " + "; ".join(sorted(set(failures))))
 
 
-def quote_requests(client, requests: list[dict], data_dir: Path) -> dict:
-    quotes = []
+def quote_requests(client, requests: list[dict], data_dir: Path, *, client_factory=None, workers=8) -> dict:
+    quotes = {}
     total_cost = Decimal("0")
     total_bytes = 0
+    pending = []
     for index, request in enumerate(requests, 1):
         receipt = cached_receipt(data_dir, request)
         if receipt:
-            quotes.append({"request": request, "cached": True, "cost_usd": "0", "billable_bytes": 0})
-            continue
+            quotes[index] = {"request": request, "cached": True, "cost_usd": "0", "billable_bytes": 0}
+        else:
+            pending.append((index, request))
+
+    thread_state = threading.local()
+
+    def quote_one(request):
+        if client_factory is not None:
+            if not hasattr(thread_state, "client"):
+                thread_state.client = client_factory()
+            local_client = thread_state.client
+        else:
+            local_client = client
         parameters = api_parameters(request)
-        cost = Decimal(str(client.metadata.get_cost(**parameters)))
-        size = int(client.metadata.get_billable_size(**parameters))
-        records = int(client.metadata.get_record_count(**parameters))
+        cost = Decimal(str(local_client.metadata.get_cost(**parameters)))
+        size = int(local_client.metadata.get_billable_size(**parameters))
+        records = int(local_client.metadata.get_record_count(**parameters))
         if not cost.is_finite() or cost < 0 or size <= 0 or records <= 0:
             raise ValueError(f'Invalid or empty quote for {request["symbol"]} {request["trading_date"]}.')
-        quotes.append({"request": request, "cached": False, "cost_usd": str(cost),
-                       "billable_bytes": size, "estimated_records": records})
-        total_cost += cost
-        total_bytes += size
-        print(f'Quote {index}/{len(requests)}: {request["symbol"]} {request["trading_date"]}: '
-              f'${cost:.4f}, {size / 1e9:.3f} GB uncompressed', flush=True)
-    return {"quoted_at": utc_string(datetime.now(UTC)), "requests": quotes,
+        return {"request": request, "cached": False, "cost_usd": str(cost),
+                "billable_bytes": size, "estimated_records": records}
+
+    # Each worker owns a separate SDK client/session. Paid downloads stay sequential.
+    with ThreadPoolExecutor(max_workers=workers if client_factory else 1) as pool:
+        futures = {pool.submit(quote_one, request): index for index, request in pending}
+        for future in as_completed(futures):
+            item = future.result()
+            quotes[futures[future]] = item
+            cost = Decimal(item["cost_usd"])
+            size = item["billable_bytes"]
+            total_cost += cost
+            total_bytes += size
+            request = item["request"]
+            print(f'Quote {len(quotes)}/{len(requests)}: {request["symbol"]} {request["trading_date"]}: '
+                  f'${cost:.4f}, {size / 1e9:.3f} GB uncompressed', flush=True)
+    return {"quoted_at": utc_string(datetime.now(UTC)),
+            "requests": [quotes[index] for index in sorted(quotes)],
             "remaining_cost_usd": str(total_cost), "remaining_billable_bytes": total_bytes}
 
 
@@ -278,7 +303,8 @@ def main(argv: list[str] | None = None) -> int:
 
     def preflight() -> dict:
         check_coverage(client, requests, output_dir)
-        quote = quote_requests(client, requests, data_dir)
+        quote = quote_requests(client, requests, data_dir,
+                               client_factory=lambda: db.Historical(os.environ["DATABENTO_API_KEY"]))
         write_json(output_dir / "quote.json", quote)
         print(f'Remaining quote: ${Decimal(quote["remaining_cost_usd"]):.4f}; '
               f'{quote["remaining_billable_bytes"] / 1e9:.3f} GB uncompressed. '
