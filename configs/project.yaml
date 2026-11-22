@@ -1,0 +1,19 @@
+data:
+  dataset: XNAS.ITCH
+  schema: mbo
+  symbols:
+    - SPY
+    - QQQ
+  date_manifest: null
+
+paths:
+  raw_dir: data/raw
+  processed_dir: data/processed
+  artifacts_dir: artifacts
+
+session:
+  timezone: America/New_York
+  analysis_start: "09:45:00"
+  analysis_end: "15:45:00"
+
+seed: 42

@@ -4,7 +4,21 @@ This project studies whether clustered order arrivals improve prediction of the 
 
 We will reconstruct Nasdaq limit order books, study limit-order placement distances, and compare a Poisson queueing model, a queue-reactive model, and a Hawkes-driven model. A queue-imbalance logistic regression will serve as a predictive benchmark.
 
-**Current status:** planning stage. At initial setup, this repository contains this README only. The directories, modules, commands, and outputs below are the implementation plan; they are not implemented yet. The research scope and December 1 checkpoint come from `proposal_v2.pdf`. The Python structure, interfaces, and intermediate schedule are proposed working choices for the team.
+**Current status (November 22, 2026):** initial configuration, local MBO ingestion, and a basic single-book replay implementation are in place. Three synthetic order-book tests pass. Real-data replay, event classification, processed datasets, and research models are still pending. The research scope and December 1 checkpoint come from `proposal_v2.pdf`; the remaining sections describe the team's implementation plan unless marked as implemented below.
+
+### Implementation progress
+
+| Component | Current progress |
+| --- | --- |
+| Environment | `pyproject.toml` and `uv.lock` record the Python dependencies; use uv to reproduce the environment. |
+| Configuration | `configs/project.yaml` sets XNAS.ITCH/MBO, SPY and QQQ, session hours, paths, and seed. `src/saf/config.py` loads the configuration and resolves paths. Dates and sample size remain open. |
+| Local ingestion | `src/saf/data/ingest.py` reads local DBN files, checks the MBO schema, yields MBO records in file order, and provides a preview command. Its CLI is checked; reading an actual market-data file is not yet validated. |
+| Basic order book | `src/saf/data/book.py` tracks orders by ID and aggregates bid/ask sizes by price. It handles additions, reductions, modifications, and resets, and returns a two-sided best quote only at `F_LAST` boundaries. Each instance is intended for one instrument/publisher; callers must keep books separate. Explicit FIFO queue positions are not implemented. |
+| Tests | `tests/test_book.py`: **3 passing tests** cover one-sided books, same-price aggregation, partial/full cancellations, empty-level removal, and a `T -> F -> C` execution whose quantity is deducted only once. |
+
+Validation so far uses hand-built MBO records, not downloaded market data. Modification/reset behavior, invalid inputs, and instrument/publisher isolation still need test coverage and validation. The full reconstruction pipeline is not complete.
+
+**Next work:** strengthen replay validation and test coverage, then implement `src/saf/data/events.py` to distinguish executions from genuine cancellations. In particular, a `C` accompanying a fill must not be counted as a separate cancellation arrival. Follow with `validate.py`, `storage.py`, and an integrated replay on a small real-data sample before expanding model development.
 
 ## 1. Scope and research questions
 
@@ -90,7 +104,7 @@ This tells us what the team needs to develop:
 | Features and labels | Reconstructed book states | Spread, imbalance, placement distances, and direction of the next mid-price move |
 | Model fitting and simulation | Those streams, states, features, and labels | Fitted arrival models and comparable prediction probabilities |
 
-These are planned development tasks. Use this example to agree on field meanings and processing rules before implementing the pipeline.
+The first ingestion and basic book-replay modules now exist; the remaining components are planned development tasks. Use this example to agree on field meanings and processing rules while completing the pipeline.
 
 The main questions are:
 
@@ -142,7 +156,7 @@ Use an installable Python package called `saf`. Keep reusable logic in `src/saf/
 safproject/
 ├── README.md
 ├── pyproject.toml                 # Package metadata, dependencies, developer tools
-├── requirements.lock.txt          # Exact versions from the working environment
+├── uv.lock                       # Locked dependency versions managed by uv
 ├── .gitignore                    # Local credentials, environments, data, generated runs
 ├── .env.example                  # Variable names only; no real credentials
 ├── configs/
@@ -376,16 +390,18 @@ For every run, save the resolved configurations, data-manifest checksum, code re
 
 The proposed stack is Python with NumPy/SciPy for numerical work, pandas or Polars with PyArrow for tabular data and Parquet, scikit-learn for logistic regression, Matplotlib for figures, PyYAML for configuration, and pytest for checks. Use the Databento SDK to read the source encoding where needed. Choose one primary table library and lock the working environment together.
 
-Once `pyproject.toml` and the scripts exist, the intended setup is:
+From the repository root, use the existing uv project to install the locked dependencies and run the current checks:
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -e ".[dev]"
-python -m pytest
+uv sync --locked
+PYTHONPATH=src uv run pytest tests/test_book.py -v
+uv run python src/saf/config.py
+uv run python src/saf/data/ingest.py --help
 ```
 
-The `[dev]` extra must include the test/developer dependencies. Create `.env.example` with names such as `DATABENTO_API_KEY` and `SAF_DATA_DIR`; real values stay in local environment variables or an ignored `.env`. Reading already obtained local files should not require an API key. Configure data locations consistently in `project.yaml`.
+Pytest is included in the `dev` dependency group, which `uv sync` installs by default. `PYTHONPATH=src` makes the current source tree importable without installing the package. To run all discovered tests, use `PYTHONPATH=src uv run pytest -v`.
+
+Keep `.env.example` limited to variable names with empty values; real values stay in local environment variables or an ignored `.env`. Reading already obtained local files does not require an API key. Configure data locations consistently in `project.yaml`.
 
 **Planned command contract:** implement these flags in the scripts. These examples will work only after the corresponding files have been created. Use the same run ID throughout a run. List `pilot_training_dates` and `pilot_validation_dates` in `project.yaml`, and validate them against the full split manifest.
 
