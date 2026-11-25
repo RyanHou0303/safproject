@@ -4,21 +4,44 @@ This project studies whether clustered order arrivals improve prediction of the 
 
 We will reconstruct Nasdaq limit order books, study limit-order placement distances, and compare a Poisson queueing model, a queue-reactive model, and a Hawkes-driven model. A queue-imbalance logistic regression will serve as a predictive benchmark.
 
-**Current status (November 22, 2026):** initial configuration, local MBO ingestion, and a basic single-book replay implementation are in place. Three synthetic order-book tests pass. Real-data replay, event classification, processed datasets, and research models are still pending. The research scope and December 1 checkpoint come from `proposal_v2.pdf`; the remaining sections describe the team's implementation plan unless marked as implemented below.
+**Current status (November 25, 2026):** prototype modules exist for local MBO ingestion, order-book replay, six-stream event classification, basic features, next-mid-price-move labels, a logistic benchmark, and Poisson rate estimation. The existing synthetic test suite has **22 passing tests**. Automatic time binning, real-data reconstruction validation, Parquet output, queue-reactive and Hawkes models, and the shared simulator are still pending. The research scope and December 1 checkpoint come from `proposal_v2.pdf`; the sections below distinguish current prototypes from the remaining implementation plan.
 
 ### Implementation progress
 
 | Component | Current progress |
 | --- | --- |
-| Environment | `pyproject.toml` and `uv.lock` record the Python dependencies; use uv to reproduce the environment. |
+| Environment | `pyproject.toml` and `uv.lock` record dependencies, including Databento, PyYAML, pytest, and scikit-learn. Use uv to reproduce the environment. |
 | Configuration | `configs/project.yaml` sets XNAS.ITCH/MBO, SPY and QQQ, session hours, paths, and seed. `src/saf/config.py` loads the configuration and resolves paths. Dates and sample size remain open. |
 | Local ingestion | `src/saf/data/ingest.py` reads local DBN files, checks the MBO schema, yields MBO records in file order, and provides a preview command. Its CLI is checked; reading an actual market-data file is not yet validated. |
-| Basic order book | `src/saf/data/book.py` tracks orders by ID and aggregates bid/ask sizes by price. It handles additions, reductions, modifications, and resets, and returns a two-sided best quote only at `F_LAST` boundaries. Each instance is intended for one instrument/publisher; callers must keep books separate. Explicit FIFO queue positions are not implemented. |
-| Tests | `tests/test_book.py`: **3 passing tests** cover one-sided books, same-price aggregation, partial/full cancellations, empty-level removal, and a `T -> F -> C` execution whose quantity is deducted only once. |
+| Basic order book | `src/saf/data/book.py` stores current resting orders by ID and aggregates displayed size by price in `bids` and `asks`. It handles additions, reductions, modifications, and resets. A quote is returned only at `F_LAST` with both sides present. Orders remain until their size reaches zero or the book is cleared. Explicit FIFO queue positions are not implemented. |
+| Event classification | `src/saf/data/events.py` converts complete XNAS.ITCH message groups into six event streams. `T -> F -> C` and `F -> C` produce one execution, using the resting side from `F`. Replacements produce marked cancel/add legs. Snapshot-only groups produce no arrival events; mixed snapshot/incremental groups currently raise an error. |
+| Replay orchestration | `src/saf/data/replay.py` maintains separate books and pending message lists for each `(publisher_id, instrument_id, channel_id)`. Every record reaches the book. At `F_LAST`, it classifies the group, clears that group's pending buffer, and yields a `ReplayStep` with raw records, classified events, and before/after quotes. It preserves input order and rejects unfinished groups at end of input. |
+| Basic features | `src/saf/features.py` calculates best bid/ask sizes, spread and mid-price in dollars, and queue imbalance from one quote. Placement distances, time-of-day features, and liquidity regimes remain to be added. |
+| Labels | `src/saf/labels.py` assigns `y_up=1` for the next upward mid-price change, `0` for downward, and `None` when no usable outcome is observed. It also records `next_move_index`. Unchanged prices are skipped, and `None` quotes break valid intervals. Callers must supply one instrument/source/day at a time. |
+| Logistic benchmark | `src/saf/models/imbalance.py` provides `fit_imbalance()` and `predict_up()`. It uses imbalance as its only predictor, skips missing training rows, and returns upward probabilities while preserving missing-row positions. Training-date selection and per-asset grouping belong to the caller. The runnable example uses synthetic quotes. |
+| Poisson fitting core | `src/saf/models/poisson.py` estimates six rates per supplied time bin as event count divided by valid exposure seconds. It accepts already aggregated counts and exposure, retains both in the output, and distinguishes an observed zero count from zero exposure. Its runnable example uses manual synthetic counts. |
+| Automated event binning | **Not implemented; deferred for now.** `src/saf/data/binning.py` is not present. Replay events are not yet automatically converted into time-of-day counts and valid exposure. Fifteen-minute bins were discussed as an initial option; the length is not configured or enforced by the current fitting core. |
+| Existing tests | **22 passing synthetic cases:** 3 in `tests/test_book.py`, 13 in `tests/test_events.py`, and 6 in `tests/test_replay.py`. Coverage includes aggregation/removal, execution deduplication, replacement marking, group boundaries, multiple instruments, resets, truncated input, and incremental generator consumption. |
 
-Validation so far uses hand-built MBO records, not downloaded market data. Modification/reset behavior, invalid inputs, and instrument/publisher isolation still need test coverage and validation. The full reconstruction pipeline is not complete.
+All verification reported here uses hand-built messages or synthetic examples. Features, labels, and model helpers do not yet have dedicated test files. There are no validated real-data model results or integrated research outputs yet.
 
-**Next work:** strengthen replay validation and test coverage, then implement `src/saf/data/events.py` to distinguish executions from genuine cancellations. In particular, a `C` accompanying a fill must not be counted as a separate cancellation arrival. Follow with `validate.py`, `storage.py`, and an integrated replay on a small real-data sample before expanding model development.
+### Event streams and the remaining data contract
+
+| Operation | Bid resting side | Ask resting side |
+| --- | --- | --- |
+| Addition | `bid_add` | `ask_add` |
+| Execution | `bid_execution` | `ask_execution` |
+| Cancellation | `bid_cancel` | `ask_cancel` |
+
+A partial execution or cancellation counts as one event with its quantity in `size`. These names identify the operation and book side, not the price level. The current classifier does not restrict events to the best bid or best ask. Before fitting arrival models for a best-queue simulator, define eligible price levels, treatment of price-improving additions, and replacement handling. Use the same selection policy for Poisson, queue-reactive, and Hawkes inputs.
+
+**Remaining connections and work:**
+
+- Add automatic time-of-day counts and valid exposure when resuming binning. Count classified events, not individual `T/F/C` records. Include observed time with no arrivals and exclude invalid intervals from both counts and exposure.
+- Fix the model clock (`ts_recv` or `ts_event`), event-selection policy, dates, and chronological split. Replay itself does not sort by sequence or timestamp. Diagnose timestamp and sequence issues without silently reordering book updates.
+- Implement reconstruction validation and Parquet storage, then verify a small real instrument-day with correct book initialization. Extend coverage for modification edge cases and snapshot transitions.
+- Add placement-distance analysis, liquidity regimes, and a common forecast grid. The current label prototype works on the supplied quote sequence; it does not construct that grid.
+- Implement queue-reactive estimation, six-dimensional Hawkes fitting/diagnostics, the shared queue simulator, evaluation, and reporting. Poisson rates alone do not produce mid-price forecasts.
 
 ## 1. Scope and research questions
 
@@ -104,7 +127,7 @@ This tells us what the team needs to develop:
 | Features and labels | Reconstructed book states | Spread, imbalance, placement distances, and direction of the next mid-price move |
 | Model fitting and simulation | Those streams, states, features, and labels | Fitted arrival models and comparable prediction probabilities |
 
-The first ingestion and basic book-replay modules now exist; the remaining components are planned development tasks. Use this example to agree on field meanings and processing rules while completing the pipeline.
+Ingestion, basic replay, event classification, feature/label helpers, and model prototypes now exist. The progress table above records their current limits; validated datasets, integrated forecasts, and final research outputs remain to be developed.
 
 The main questions are:
 
@@ -117,40 +140,57 @@ The prediction target is a Nasdaq venue mid-price change. A claim about detectin
 
 ## 2. End-to-end workflow
 
-```text
-Freeze dates, data conventions, and experiment settings
-                        |
-Obtain raw MBO files and record their provenance
-                        |
-Replay messages -> reconstruct books -> validate reconstruction
-                        |
-Write canonical events, quotes, and queues to Parquet
-                        |
-Build features, liquidity regimes, and shared forecast labels
-                        |
-        +---------------+------------------+
-        |               |                  |
- Placement tails    Logistic benchmark   Arrival models
-                                        /     |      \
-                                   Poisson  Queue-   Hawkes
-                                           reactive
-                                        \     |      /
-                                    Shared simulator
-                                             |
-                          Predictions on identical forecast rows
-                                             |
-                          Scores, calibration, paired bootstrap
-                                             |
-                               Figures, report, presentation
+Green nodes are implemented prototypes; gray nodes are pending components. Arrows show data dependencies, including connections that still need orchestration. The Poisson prototype currently consumes manually supplied counts and exposure.
+
+```mermaid
+flowchart TD
+    Raw["Local MBO records<br/>Real-data validation pending"] --> Ingest["ingest.py<br/>Read records in file order"]
+    Ingest --> Replay["replay.py<br/>Group and dispatch by source"]
+    Replay --> Book["book.py<br/>Current orders, price levels, before/after quotes"]
+    Replay --> Events["events.py<br/>Six classified event streams"]
+
+    Book --> Features["features.py<br/>Basic quote features X"]
+    Book --> Labels["labels.py<br/>Next-mid-price-move targets y"]
+    Features --> Logistic["models/imbalance.py<br/>Logistic fit and upward probabilities"]
+    Labels -->|Training targets| Logistic
+
+    Events --> Binning["Event selection, time bins and valid exposure<br/>Pending / deferred"]
+    Book --> Binning
+    Binning -.-> Poisson["models/poisson.py<br/>Fitting core implemented<br/>Manual counts and exposure today"]
+    Events --> QR["Queue-reactive estimation<br/>Pending"]
+    Features --> QR
+    Events --> Hawkes["Hawkes fitting and diagnostics<br/>Pending"]
+    Poisson --> Simulator["Shared queue simulator<br/>Pending"]
+    QR --> Simulator
+    Hawkes --> Simulator
+    Book -->|Initial queue state| Simulator
+
+    Features --> Regimes["Liquidity regimes<br/>Pending"]
+    Logistic --> Evaluation["Common forecast evaluation<br/>Brier, log loss, calibration, day bootstrap<br/>Pending"]
+    Simulator --> Evaluation
+    Labels -->|Observed outcomes| Evaluation
+    Regimes --> Evaluation
+
+    Book --> Tails["Placement distances and tail comparisons<br/>Pending"]
+    Events --> Tails
+    Book --> Validation["Reconstruction validation and Parquet storage<br/>Pending"]
+    Events --> Validation
+    Tails --> Report["Figures, report, presentation<br/>Pending"]
+    Evaluation --> Report
+
+    classDef prototype fill:#dcfce7,stroke:#16a34a,color:#14532d;
+    classDef pending fill:#f3f4f6,stroke:#9ca3af,color:#374151;
+    class Ingest,Replay,Book,Events,Features,Labels,Logistic,Poisson prototype;
+    class Raw,Binning,QR,Hawkes,Simulator,Regimes,Evaluation,Tails,Validation,Report pending;
 ```
 
 Start with **one instrument and one training day**. After reconstruction passes its checks, expand to a small pilot with separate training and validation subsets drawn from their respective full-sample splits. Keep test days outside the pilot, then process the full sample. Model development can proceed in parallel once the data interfaces and a small fixture are stable.
 
 After the fixture and schema are frozen, tail analysis, baseline fitting, and Hawkes fitting can use the same processed data. Simulator development starts with synthetic rates and queues; evaluation starts with synthetic prediction tables. Integrate these components on the pilot before full-data fitting.
 
-## 3. Files and directories to create
+## 3. Repository layout and remaining files
 
-Use an installable Python package called `saf`. Keep reusable logic in `src/saf/`, executable orchestration in `scripts/`, and exploration in notebooks.
+The tree below is the target layout and includes both existing files and planned modules. Refer to the progress table for implementation status. Keep reusable logic in `src/saf/`, executable orchestration in `scripts/`, and exploration in notebooks. An installable package is the target; current commands use `PYTHONPATH=src`.
 
 ```text
 safproject/
@@ -185,6 +225,8 @@ safproject/
 │   │   ├── ingest.py             # Read DBN/MBO data; retain source metadata and ordering
 │   │   ├── book.py               # Orders, price levels, queue state, and message application
 │   │   ├── events.py             # Link execution records; derive canonical event streams
+│   │   ├── replay.py             # Source-specific replay, event grouping, before/after quotes
+│   │   ├── binning.py            # Planned/deferred: time bins, counts, and valid exposure
 │   │   ├── validate.py           # Book invariants, data-quality checks, daily summaries
 │   │   └── storage.py            # Parquet schemas, partitioning, reads, and writes
 │   ├── features.py               # Placement distances, imbalance, time-of-day, liquidity
@@ -224,6 +266,7 @@ safproject/
 │   ├── fixtures/                 # Small synthetic message sequences with known answers
 │   ├── test_book.py
 │   ├── test_events.py
+│   ├── test_replay.py
 │   ├── test_labels.py
 │   ├── test_models.py
 │   ├── test_simulation.py
@@ -260,7 +303,7 @@ Each subpackage needs its own `__init__.py`. Create files as their work begins; 
 
 ### Step 1: Ingest data and reconstruct the books
 
-**Implement:** `ingest.py`, `book.py`, `events.py`, `validate.py`, `storage.py`, and scripts `01`-`02`.
+**Implement:** `ingest.py`, `book.py`, `events.py`, `replay.py`, `validate.py`, `storage.py`, and scripts `01`-`02`. The first four have prototype implementations; the full completion criteria below are still pending.
 
 1. Inventory raw files with symbol, date, source, coverage, file size, and checksum. Keep raw files unchanged.
 2. Load enough history to initialize the book correctly before 09:45. Replay from a valid snapshot or the required earlier session history; filtering raw messages to 09:45 first can leave resting orders missing.
@@ -304,7 +347,7 @@ Each subpackage needs its own `__init__.py`. Create files as their work begins; 
 
 ### Step 4: Fit the logistic, Poisson, and queue-reactive baselines
 
-**Implement:** `imbalance.py`, `poisson.py`, `queue_reactive.py`, shared simulation rules, and script `05`.
+**Implement:** `imbalance.py`, `poisson.py`, `queue_reactive.py`, event binning/exposure preparation, shared simulation rules, and script `05`. Logistic and Poisson fitting helpers exist; automatic preparation, queue-reactive estimation, and simulation remain pending.
 
 - **Logistic benchmark:** fit the probability of an upward move from queue imbalance. Use validation data for any regularization choice. Optionally report a second benchmark with time-of-day controls, clearly labeled.
 - **Poisson model:** estimate each event type's rate by time-of-day bin as event count divided by valid exposure time.
@@ -394,26 +437,39 @@ From the repository root, use the existing uv project to install the locked depe
 
 ```bash
 uv sync --locked
-PYTHONPATH=src uv run pytest tests/test_book.py -v
+PYTHONPATH=src uv run pytest -v
 uv run python src/saf/config.py
-uv run python src/saf/data/ingest.py --help
+PYTHONPATH=src uv run python -m saf.data.ingest --help
+PYTHONPATH=src uv run python -m saf.data.replay --help
+PYTHONPATH=src uv run python -m saf.features
+PYTHONPATH=src uv run python -m saf.labels
+PYTHONPATH=src uv run python -m saf.models.imbalance
+PYTHONPATH=src uv run python -m saf.models.poisson
 ```
 
-Pytest is included in the `dev` dependency group, which `uv sync` installs by default. `PYTHONPATH=src` makes the current source tree importable without installing the package. To run all discovered tests, use `PYTHONPATH=src uv run pytest -v`.
+Pytest is included in the `dev` dependency group, which `uv sync` installs by default. `PYTHONPATH=src` makes the current source tree importable without installing the package. The feature, label, and model commands above run synthetic in-module examples. They do not train on downloaded market data or evaluate held-out performance. The Poisson example does not perform automatic event binning.
+
+To preview an already obtained local file:
+
+```bash
+PYTHONPATH=src uv run python -m saf.data.replay path/to/file.dbn.zst --limit 5
+```
+
+`--limit` counts completed raw-event groups (`ReplayStep` objects), not raw records or classified research events. A replacement group can contain two research events; a reset can contain none. A limited preview is not a full-file reconstruction validation.
 
 Keep `.env.example` limited to variable names with empty values; real values stay in local environment variables or an ignored `.env`. Reading already obtained local files does not require an API key. Configure data locations consistently in `project.yaml`.
 
 **Planned command contract:** implement these flags in the scripts. These examples will work only after the corresponding files have been created. Use the same run ID throughout a run. List `pilot_training_dates` and `pilot_validation_dates` in `project.yaml`, and validate them against the full split manifest.
 
 ```bash
-python scripts/01_prepare_data.py --config configs/project.yaml
-python scripts/02_reconstruct_books.py --config configs/project.yaml --pilot
-python scripts/03_build_features.py --config configs/project.yaml --eval configs/evaluation.yaml --pilot
-python scripts/04_fit_tails.py --config configs/project.yaml --models configs/models.yaml --pilot --run-id pilot_001
-python scripts/05_fit_baselines.py --config configs/project.yaml --models configs/models.yaml --pilot --run-id pilot_001
-python scripts/06_fit_hawkes.py --config configs/project.yaml --models configs/models.yaml --pilot --run-id pilot_001
-python scripts/07_predict.py --config configs/project.yaml --eval configs/evaluation.yaml --split validation --pilot --run-id pilot_001
-python scripts/08_evaluate.py --config configs/project.yaml --eval configs/evaluation.yaml --split validation --pilot --run-id pilot_001
+uv run python scripts/01_prepare_data.py --config configs/project.yaml
+uv run python scripts/02_reconstruct_books.py --config configs/project.yaml --pilot
+uv run python scripts/03_build_features.py --config configs/project.yaml --eval configs/evaluation.yaml --pilot
+uv run python scripts/04_fit_tails.py --config configs/project.yaml --models configs/models.yaml --pilot --run-id pilot_001
+uv run python scripts/05_fit_baselines.py --config configs/project.yaml --models configs/models.yaml --pilot --run-id pilot_001
+uv run python scripts/06_fit_hawkes.py --config configs/project.yaml --models configs/models.yaml --pilot --run-id pilot_001
+uv run python scripts/07_predict.py --config configs/project.yaml --eval configs/evaluation.yaml --split validation --pilot --run-id pilot_001
+uv run python scripts/08_evaluate.py --config configs/project.yaml --eval configs/evaluation.yaml --split validation --pilot --run-id pilot_001
 ```
 
 Define `--pilot` as processing the listed training and validation subsets, fitting on the training subset only, and producing validation forecasts on the validation subset only. To scale up, rerun data preparation and processing without `--pilot`, then fit and validate under a new run ID. After freezing the selected configuration, run prediction and evaluation with `--split test` using the saved fitted models. Changing the split must not trigger refitting.
@@ -422,7 +478,7 @@ For data access, inventory the team's existing raw files, record the Databento d
 
 ## 7. Schedule and deliverables
 
-The proposal sets a **December 1 checkpoint**. The internal dates below are a suggested schedule leading up to that checkpoint; the final submission deadline still needs to be recorded.
+The proposal sets a **December 1 checkpoint**. The internal dates below are the original suggested targets, not claims that those deliverables are complete. See the implementation progress section for actual status. The final submission deadline still needs to be recorded.
 
 | Target | Deliverable | Evidence |
 | --- | --- | --- |
