@@ -2,15 +2,22 @@ PRICE_SCALE = 1_000_000_000
 
 """
 quote = {
-    "bid_price": 100_000_000_000,  # bid1：$100.00
-    "bid_size": 100,             # bid1#：100
-    "ask_price": 100_020_000_000,  # ask1：$100.02
-    "ask_size": 50,              # ask1：50
+    "bid_price": 100_000_000_000,  # Best bid: $100.00
+    "bid_size": 100,              # Displayed shares at the best bid
+    "ask_price": 100_020_000_000,  # Best ask: $100.02
+    "ask_size": 50,               # Displayed shares at the best ask
 }
 """
 def build_features(
     quote: dict[str, int] | None,
 ):
+    """One quote -> sizes, dollar spread/mid-price, and queue imbalance.
+
+    For the quote above: spread_dollars=0.02, mid_price_dollars=100.01,
+    imbalance=1/3, bid_size=100, ask_size=50. None input returns None.
+    Supply a valid two-sided quote; see docs/code_examples.md.
+    """
+
     if quote is None:
         return None
 

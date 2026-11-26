@@ -10,7 +10,13 @@ F_SNAPSHOT = 32
 
 @dataclass(frozen=True)
 class Event:
-    """A classified event with its original source records."""
+    """One research event, which can represent several raw feed records.
+
+    Example: Event("bid_execution", fill, linked_record=cancel).
+    record is one representative MBOMsg; linked_record is one companion
+    or None. The complete T/F/C list is kept in ReplayStep.records.
+    A replacement has two Event objects, both with is_replace=True.
+    """
 
     stream: str
     record: db.MBOMsg
@@ -44,7 +50,13 @@ def _make_event(
 
 
 def classify_event(records: Sequence[db.MBOMsg]) -> list[Event]:
-    """Classify one complete XNAS.ITCH event in original record order."""
+    """Classify one complete XNAS.ITCH event in original record order.
+
+    Input [trade, fill, cancel] -> [Event("bid_execution", fill, cancel)]
+    when the resting side is bid. The three raw records count as one fill.
+    Input [ordinary_cancel] -> one bid_cancel or ask_cancel Event.
+    Snapshot-only/reset groups -> []; see docs/code_examples.md.
+    """
     if not records:
         return []
 

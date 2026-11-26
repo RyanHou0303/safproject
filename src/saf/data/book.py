@@ -15,12 +15,28 @@ MboMsg(
 """
 @dataclass
 class Order:
+    """One resting order's side, integer price, and remaining shares.
+
+    Example: Order(side="B", price=100_000_000_000, size=10).
+    The order ID is the key in OrderBook.orders, not a field here.
+    """
+
     side:str
     price:int
     size:int
 
 F_LAST = 128
 class OrderBook:
+    """Current state for one source, not a history of completed orders.
+
+    orders: {1001: Order("B", 100_000_000_000, 10),
+             1002: Order("B", 100_000_000_000, 20),
+             2001: Order("A", 100_020_000_000, 50)}
+    bids:   {100_000_000_000: 30}  # 10 + 20 shares.
+    asks:   {100_020_000_000: 50}
+    See docs/code_examples.md for a consistent multi-order example.
+    """
+
     def __init__(self)->None:
         self.orders:dict[int,Order]={}#{orderid:Order}
         self.bids:dict[int,int]={}#{price:size}
@@ -36,6 +52,14 @@ class OrderBook:
             levels[price] = new_size
 
     def apply(self,record:db.MBOMsg):
+        """Apply one raw record; return a quote only at a complete boundary.
+
+        Output example: {"bid_price": 100_000_000_000, "bid_size": 30,
+                         "ask_price": 100_020_000_000, "ask_size": 50}.
+        Returns None without F_LAST or without both book sides.
+        Raw prices stay in integer units; sizes are shares.
+        """
+
         book_key = (int(record.publisher_id),int(record.instrument_id))
         if self._book_key is None:
             self._book_key= book_key

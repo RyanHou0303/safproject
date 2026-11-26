@@ -16,6 +16,13 @@ STREAMS = (
 
 @dataclass(frozen=True)
 class PoissonBin:
+    """One time bin's six counts, valid seconds, and fitted rates/second.
+
+    Example: counts["bid_add"]=90 and exposure_seconds=900.0 give
+    rates_per_second["bid_add"]=0.1. No exposure gives rates=None;
+    positive exposure with no arrivals gives six zero rates.
+    """
+
     counts: dict[str, int]
     exposure_seconds: float
     rates_per_second: dict[str, float] | None

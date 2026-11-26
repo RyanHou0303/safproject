@@ -4,6 +4,14 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class Label:
+    """Direction and list position of the first later different mid-price.
+
+    Label(1, 3): the next move is up, at quotes[3] in the input list.
+    Label(0, 4): the next move is down, at quotes[4].
+    Label(None, None): no usable next move was observed.
+    next_move_index is not a feed sequence number or timestamp.
+    """
+
     y_up: int | None
     next_move_index: int | None
 

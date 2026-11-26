@@ -17,7 +17,14 @@ F_LAST = 128
 
 @dataclass
 class ReplayStep:
-    """One completed raw event and its resulting book state."""
+    """One completed raw group, its classifications, and before/after quotes.
+
+    Example: records=[T, F, C], events=[Event("bid_execution", F, C)].
+    Here T/F/C stand for raw MBOMsg objects, not action strings.
+    quote_before/quote_after contain bid_price, bid_size, ask_price,
+    ask_size, or are None when a two-sided quote is unavailable.
+    Both replacement legs share the group's quote_before.
+    """
 
     records: list[db.MBOMsg]
     events: list[Event]
@@ -26,7 +33,13 @@ class ReplayStep:
 
 
 def replay_records(records: Iterable[db.MBOMsg]) -> Iterator[ReplayStep]:
-    """Replay XNAS.ITCH records in input order, separately by source."""
+    """Yield one ReplayStep per F_LAST-completed group, in input order.
+
+    Input: raw records, for example iter_mbo("local.dbn.zst").
+    Output: ReplayStep objects; one can contain zero, one, or two Events.
+    Books and pending buffers are keyed by (publisher, instrument, channel).
+    Clearing a completed pending buffer does not clear resting orders.
+    """
     books: dict[tuple[int, int, int], OrderBook] = {}
     pending: dict[tuple[int, int, int], list[db.MBOMsg]] = {}
     quotes: dict[tuple[int, int, int], dict[str, int] | None] = {}

@@ -4,7 +4,9 @@ This project studies whether clustered order arrivals improve prediction of the 
 
 We will reconstruct Nasdaq limit order books, study limit-order placement distances, and compare a Poisson queueing model, a queue-reactive model, and a Hawkes-driven model. A queue-imbalance logistic regression will serve as a predictive benchmark.
 
-**Current status (November 25, 2026):** prototype modules exist for local MBO ingestion, order-book replay, six-stream event classification, basic features, next-mid-price-move labels, a logistic benchmark, and Poisson rate estimation. The existing synthetic test suite has **22 passing tests**. Automatic time binning, real-data reconstruction validation, Parquet output, queue-reactive and Hawkes models, and the shared simulator are still pending. The research scope and December 1 checkpoint come from `proposal_v2.pdf`; the sections below distinguish current prototypes from the remaining implementation plan.
+**Current status (November 26, 2026):** prototype modules exist for local MBO ingestion, order-book replay, six-stream event classification, basic features, next-mid-price-move labels, a logistic benchmark, Poisson rate estimation, configurable time-bin counts, and counts conditional on pre-event queue sizes. The synthetic test suite has **29 passing tests**. We are preparing the queue-reactive model: state-conditioned counts exist, but state exposure and conditional rate estimation are not implemented. Real-data reconstruction validation, Parquet output, Hawkes models, and the shared simulator remain pending. The research scope and December 1 checkpoint come from `proposal_v2.pdf`; the sections below distinguish current prototypes from the remaining implementation plan.
+
+**Start here:** [Code guide: inputs, outputs, and key classes](docs/code_examples.md). It explains `Order`, `OrderBook`, `Event`, `ReplayStep`, `Label`, `PoissonBin`, and `QueueState`, with one runnable synthetic example connecting the implemented modules. No market-data download is needed.
 
 ### Implementation progress
 
@@ -12,7 +14,7 @@ We will reconstruct Nasdaq limit order books, study limit-order placement distan
 | --- | --- |
 | Environment | `pyproject.toml` and `uv.lock` record dependencies, including Databento, PyYAML, pytest, and scikit-learn. Use uv to reproduce the environment. |
 | Configuration | `configs/project.yaml` sets XNAS.ITCH/MBO, SPY and QQQ, session hours, paths, and seed. `src/saf/config.py` loads the configuration and resolves paths. Dates and sample size remain open. |
-| Local ingestion | `src/saf/data/ingest.py` reads local DBN files, checks the MBO schema, yields MBO records in file order, and provides a preview command. Its CLI is checked; reading an actual market-data file is not yet validated. |
+| Local ingestion | `src/saf/data/ingest.py` reads local DBN files, checks the MBO schema, yields MBO records in file order, and provides a preview command. Reading an actual market-data file is not yet validated. |
 | Basic order book | `src/saf/data/book.py` stores current resting orders by ID and aggregates displayed size by price in `bids` and `asks`. It handles additions, reductions, modifications, and resets. A quote is returned only at `F_LAST` with both sides present. Orders remain until their size reaches zero or the book is cleared. Explicit FIFO queue positions are not implemented. |
 | Event classification | `src/saf/data/events.py` converts complete XNAS.ITCH message groups into six event streams. `T -> F -> C` and `F -> C` produce one execution, using the resting side from `F`. Replacements produce marked cancel/add legs. Snapshot-only groups produce no arrival events; mixed snapshot/incremental groups currently raise an error. |
 | Replay orchestration | `src/saf/data/replay.py` maintains separate books and pending message lists for each `(publisher_id, instrument_id, channel_id)`. Every record reaches the book. At `F_LAST`, it classifies the group, clears that group's pending buffer, and yields a `ReplayStep` with raw records, classified events, and before/after quotes. It preserves input order and rejects unfinished groups at end of input. |
@@ -20,10 +22,20 @@ We will reconstruct Nasdaq limit order books, study limit-order placement distan
 | Labels | `src/saf/labels.py` assigns `y_up=1` for the next upward mid-price change, `0` for downward, and `None` when no usable outcome is observed. It also records `next_move_index`. Unchanged prices are skipped, and `None` quotes break valid intervals. Callers must supply one instrument/source/day at a time. |
 | Logistic benchmark | `src/saf/models/imbalance.py` provides `fit_imbalance()` and `predict_up()`. It uses imbalance as its only predictor, skips missing training rows, and returns upward probabilities while preserving missing-row positions. Training-date selection and per-asset grouping belong to the caller. The runnable example uses synthetic quotes. |
 | Poisson fitting core | `src/saf/models/poisson.py` estimates six rates per supplied time bin as event count divided by valid exposure seconds. It accepts already aggregated counts and exposure, retains both in the output, and distinguishes an observed zero count from zero exposure. Its runnable example uses manual synthetic counts. |
-| Automated event binning | **Not implemented; deferred for now.** `src/saf/data/binning.py` is not present. Replay events are not yet automatically converted into time-of-day counts and valid exposure. Fifteen-minute bins were discussed as an initial option; the length is not configured or enforced by the current fitting core. |
-| Existing tests | **22 passing synthetic cases:** 3 in `tests/test_book.py`, 13 in `tests/test_events.py`, and 6 in `tests/test_replay.py`. Coverage includes aggregation/removal, execution deduplication, replacement marking, group boundaries, multiple instruments, resets, truncated input, and incremental generator consumption. |
+| Time-bin counts | `src/saf/data/binning.py` provides `bin_event_stream()`: classified events plus explicit timezone-aware start/end times produce six counts per time bin. Default width is 15 minutes; `bin_minutes` is configurable. Bins use `[left, right)`, preserve empty bins, and use `ts_recv` by default. It counts arrivals, not shares, and does not calculate valid exposure. |
+| State-conditioned counts | `src/saf/data/state_events.py` provides `bin_events_by_state()`: replay steps produce `time bin -> (best bid shares, best ask shares) -> six counts`. It uses `quote_before`, skips missing pre-event quotes, and reuses `bin_event_stream()` for each state. States are exact share-size pairs, with no small/medium/large grouping. It buffers events in memory and is currently a small-sample prototype. |
+| Queue-reactive fitting | **Preparation only.** Conditional counts are available. State dwell times, sparse-state handling, and `lambda = count / state exposure seconds` still need implementation; `models/queue_reactive.py` does not exist yet. |
+| Existing tests | **29 passing synthetic cases:** 3 book tests, 13 event tests, 6 replay tests, and 7 binning cases (including a parametrized timestamp conversion). Binning coverage includes six-type counts, interval boundaries, empty bins, configurable width, a partial last bin, and mixed-instrument rejection. |
 
-All verification reported here uses hand-built messages or synthetic examples. Features, labels, and model helpers do not yet have dedicated test files. There are no validated real-data model results or integrated research outputs yet.
+All verification reported here uses hand-built messages or synthetic examples. State-conditioned counting has been checked with the runnable example in the code guide, but has no dedicated test file. Features, labels, and model helpers also lack dedicated test files. There are no validated real-data model results or integrated research outputs yet.
+
+### Where we continue next
+
+1. Measure valid time spent in each `(bid_size, ask_size)` state, splitting intervals at time-bin boundaries and accounting for initialization, gaps, and session end. A state can have positive exposure even when no events arrive there.
+2. Fit queue-reactive rates using `count / state exposure seconds`; decide state grouping and how to handle rarely observed or unseen states. Do not divide each state's count by the entire 15-minute bin.
+3. Implement Hawkes fitting and diagnostics using the original six timestamped streams, then connect the arrival models to the shared queue simulator.
+
+Before using these models for research results, validate a small real instrument-day and freeze a common event-selection policy and observation mask.
 
 ### Event streams and the remaining data contract
 
@@ -37,7 +49,7 @@ A partial execution or cancellation counts as one event with its quantity in `si
 
 **Remaining connections and work:**
 
-- Add automatic time-of-day counts and valid exposure when resuming binning. Count classified events, not individual `T/F/C` records. Include observed time with no arrivals and exclude invalid intervals from both counts and exposure.
+- Connect the existing time/state counts to valid exposure. Count classified events, not individual `T/F/C` records. Include observed time with no arrivals and exclude invalid intervals from both counts and exposure. The counters currently filter timestamps but do not automatically exclude every invalid book interval.
 - Fix the model clock (`ts_recv` or `ts_event`), event-selection policy, dates, and chronological split. Replay itself does not sort by sequence or timestamp. Diagnose timestamp and sequence issues without silently reordering book updates.
 - Implement reconstruction validation and Parquet storage, then verify a small real instrument-day with correct book initialization. Extend coverage for modification edge cases and snapshot transitions.
 - Add placement-distance analysis, liquidity regimes, and a common forecast grid. The current label prototype works on the supplied quote sequence; it does not construct that grid.
@@ -140,7 +152,7 @@ The prediction target is a Nasdaq venue mid-price change. A claim about detectin
 
 ## 2. End-to-end workflow
 
-Green nodes are implemented prototypes; gray nodes are pending components. Arrows show data dependencies, including connections that still need orchestration. The Poisson prototype currently consumes manually supplied counts and exposure.
+Green nodes are implemented prototypes; gray nodes are pending components. Arrows show data dependencies, including connections that still need orchestration. Time-bin and state-conditioned counts exist. Valid exposure is still supplied separately; the state-conditioned counter does not yet fit queue-reactive rates.
 
 ```mermaid
 flowchart TD
@@ -154,11 +166,14 @@ flowchart TD
     Features --> Logistic["models/imbalance.py<br/>Logistic fit and upward probabilities"]
     Labels -->|Training targets| Logistic
 
-    Events --> Binning["Event selection, time bins and valid exposure<br/>Pending / deferred"]
-    Book --> Binning
-    Binning -.-> Poisson["models/poisson.py<br/>Fitting core implemented<br/>Manual counts and exposure today"]
-    Events --> QR["Queue-reactive estimation<br/>Pending"]
-    Features --> QR
+    Events --> Binning["binning.py<br/>Six counts per time bin"]
+    Replay --> StateCounts["state_events.py<br/>Time bin + pre-event queue state counts"]
+    StateCounts -->|Reuses| Binning
+    Replay --> Exposure["Valid exposure and state dwell times<br/>Pending"]
+    Binning --> Poisson["models/poisson.py<br/>Six rates from counts / exposure"]
+    Exposure -.-> Poisson
+    StateCounts --> QR["Queue-reactive rate estimation<br/>Pending"]
+    Exposure -.-> QR
     Events --> Hawkes["Hawkes fitting and diagnostics<br/>Pending"]
     Poisson --> Simulator["Shared queue simulator<br/>Pending"]
     QR --> Simulator
@@ -180,8 +195,8 @@ flowchart TD
 
     classDef prototype fill:#dcfce7,stroke:#16a34a,color:#14532d;
     classDef pending fill:#f3f4f6,stroke:#9ca3af,color:#374151;
-    class Ingest,Replay,Book,Events,Features,Labels,Logistic,Poisson prototype;
-    class Raw,Binning,QR,Hawkes,Simulator,Regimes,Evaluation,Tails,Validation,Report pending;
+    class Ingest,Replay,Book,Events,Features,Labels,Logistic,Poisson,Binning,StateCounts prototype;
+    class Raw,Exposure,QR,Hawkes,Simulator,Regimes,Evaluation,Tails,Validation,Report pending;
 ```
 
 Start with **one instrument and one training day**. After reconstruction passes its checks, expand to a small pilot with separate training and validation subsets drawn from their respective full-sample splits. Keep test days outside the pilot, then process the full sample. Model development can proceed in parallel once the data interfaces and a small fixture are stable.
@@ -205,6 +220,7 @@ safproject/
 │   └── evaluation.yaml           # Forecast grid, simulation budget, censoring, bootstrap
 ├── docs/
 │   ├── proposal_v2.pdf            # Team copy of the original proposal
+│   ├── code_examples.md           # Existing: input/output guide and runnable synthetic example
 │   ├── decisions.md              # Frozen conventions and reasons for changes
 │   ├── data_dictionary.md        # Schemas, units, event mapping, timestamp conventions
 │   └── experiment_log.md         # Run IDs, configurations, outcomes, known limitations
@@ -226,7 +242,8 @@ safproject/
 │   │   ├── book.py               # Orders, price levels, queue state, and message application
 │   │   ├── events.py             # Link execution records; derive canonical event streams
 │   │   ├── replay.py             # Source-specific replay, event grouping, before/after quotes
-│   │   ├── binning.py            # Planned/deferred: time bins, counts, and valid exposure
+│   │   ├── binning.py            # Existing: six event counts per configurable time bin
+│   │   ├── state_events.py       # Existing: time-bin counts by pre-event best queue sizes
 │   │   ├── validate.py           # Book invariants, data-quality checks, daily summaries
 │   │   └── storage.py            # Parquet schemas, partitioning, reads, and writes
 │   ├── features.py               # Placement distances, imbalance, time-of-day, liquidity
@@ -347,7 +364,7 @@ Each subpackage needs its own `__init__.py`. Create files as their work begins; 
 
 ### Step 4: Fit the logistic, Poisson, and queue-reactive baselines
 
-**Implement:** `imbalance.py`, `poisson.py`, `queue_reactive.py`, event binning/exposure preparation, shared simulation rules, and script `05`. Logistic and Poisson fitting helpers exist; automatic preparation, queue-reactive estimation, and simulation remain pending.
+**Implement:** `imbalance.py`, `poisson.py`, `queue_reactive.py`, event binning/exposure preparation, shared simulation rules, and script `05`. Logistic and Poisson fitting helpers, time-bin counts, and pre-event state-conditioned counts exist. Valid exposure, queue-reactive rate estimation, and simulation remain pending.
 
 - **Logistic benchmark:** fit the probability of an upward move from queue imbalance. Use validation data for any regularization choice. Optionally report a second benchmark with time-of-day controls, clearly labeled.
 - **Poisson model:** estimate each event type's rate by time-of-day bin as event count divided by valid exposure time.
@@ -447,7 +464,7 @@ PYTHONPATH=src uv run python -m saf.models.imbalance
 PYTHONPATH=src uv run python -m saf.models.poisson
 ```
 
-Pytest is included in the `dev` dependency group, which `uv sync` installs by default. `PYTHONPATH=src` makes the current source tree importable without installing the package. The feature, label, and model commands above run synthetic in-module examples. They do not train on downloaded market data or evaluate held-out performance. The Poisson example does not perform automatic event binning.
+Pytest is included in the `dev` dependency group, which `uv sync` installs by default. `PYTHONPATH=src` makes the current source tree importable without installing the package. The feature, label, and model commands above run synthetic in-module examples. They do not train on downloaded market data or evaluate held-out performance. The standalone Poisson example uses manual counts; [the runnable code guide](docs/code_examples.md#9-runnable-synthetic-workflow) shows automatic time binning, state-conditioned counts, and Poisson fitting together.
 
 To preview an already obtained local file:
 
